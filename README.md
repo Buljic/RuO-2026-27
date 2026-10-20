@@ -13,6 +13,112 @@ prava datoteka, a pokreće se jednom naredbom `make`, pa se na nastavi odmah vid
 
 Bilješke (PDF) uz primjere su u mapi [`docs/`](docs/). Svaki primjer ima i objašnjenje pozadine (KVM/QEMU/libvirt, cloud-init, Ansible, Docker, Kubernetes) u bilješkama.
 
+## Getting started: korak po korak
+
+Ovo je cijeli put od praznog računara do prvog pokrenutog primjera. Traje oko 15 minuta (većina je instalacija paketa).
+Koraci 1 do 6 rade se **jednom**; poslije toga se samo pokreću primjeri.
+
+### 0. Šta mora postojati na Windowsu
+
+| Šta | Zašto | Kako |
+|---|---|---|
+| **WSL2 s Ubuntu 22.04 ili 24.04** | svi alati rade na Linuxu | PowerShell: `wsl --install -d Ubuntu` |
+| **Docker Desktop** s uključenom WSL integracijom | samo za primjere `s3-p4` i `s3-p5` | Docker Desktop → Settings → Resources → WSL integration → uključiti Ubuntu |
+
+Linux korisnici nemaju ovaj korak: dovoljno je Ubuntu/Debian s `apt`.
+
+### 1. Otvorite Ubuntu i klonirajte repozitorij u home direktorij
+
+```bash
+cd ~ && git clone https://github.com/Dadyze/RuO-2026-27.git && cd RuO-2026-27
+```
+
+Repozitorij mora biti u Linux fajl sistemu (`~/...`), **ne** u `/mnt/c/...` (Windows disk). Na Windows disku svi imaju pravo
+pisanja, pa Ansible ignoriše `ansible.cfg` i Vault ne radi.
+
+### 2. Pokrenite instalacijsku skriptu
+
+```bash
+./00-setup.sh
+```
+
+Traži vašu sudo lozinku i instalira sve potrebno: `git`, `make`, `ansible`, **Terraform**, **Packer**, KVM/libvirt,
+`kubectl`, `kind`, te pravi SSH ključ za virtualne mašine (detalji su u odjeljku "Instalacija" niže). Traje nekoliko minuta.
+Završava listom alata, gdje bi svaki trebalo da bude `ok`.
+
+Na ispisu mogu biti dva upozorenja, i oba se rješavaju u sljedećem koraku:
+
+- `systemd nije uključen` ili `systemd nije aktivan`: libvirt je servis, pa mu treba `systemd`. Skripta ga u WSL2 sama
+  uključuje u `/etc/wsl.conf`, ali promjena počinje važiti tek nakon restarta WSL-a.
+- `Dodani ste u nove grupe (libvirt/kvm/docker)`: članstvo u grupama počinje važiti tek u novoj sesiji.
+
+### 3. Restartujte WSL (samo ako je bilo upozorenje)
+
+U **PowerShellu** (ne u Ubuntuu):
+
+```powershell
+wsl --shutdown
+```
+
+Zatim ponovo otvorite Ubuntu i vratite se u repozitorij:
+
+```bash
+cd ~/RuO-2026-27
+```
+
+### 4. Pokrenite skriptu ponovo (samo ako je bio restart)
+
+```bash
+./00-setup.sh
+```
+
+Skripta je idempotentna: ono što je već instalirano preskače, a sada kad `systemd` radi, pokreće `libvirtd` i pravi libvirt
+pool i mrežu `default` koje očekuju Terraform primjeri. Ako `/dev/kvm` ne postoji, VM primjeri ostaju na nivou `plan`/`validate`
+(dovoljno za nastavu).
+
+### 5. Provjerite da libvirt radi
+
+```bash
+virsh -c qemu:///system list --all
+```
+
+Treba da ispiše praznu tabelu (`Id  Name  State`) **bez greške**. Prazna lista je ispravna, jer još nema virtualnih mašina.
+
+### 6. Provjerite alate
+
+```bash
+make check
+```
+
+Svaki alat treba da bude `ok`. Ako nešto nedostaje, ponovo pokrenite `./00-setup.sh`.
+
+### 7. Pokrenite prvi primjer
+
+```bash
+make s2-p1
+```
+
+Terraform bez oblaka (upravlja jednom datotekom) prolazi šest koraka s naslovima: `init`/`plan`, `apply`, ponovni `apply`
+(`0 added, 0 changed`: **idempotentnost**), promjena varijable, ručna izmjena datoteke (**drift**) i njegov ispravak.
+Naredbe se ispisuju prije izvršavanja, da se vidi šta se radi. Pokrenite ga odmah ponovo: ishod je isti.
+
+### 8. Ostali primjeri, redom
+
+```bash
+make help
+```
+
+`make help` ispisuje sve ciljeve. Primjeri se pokreću redom (`s2-p2`, `s2-p3`, `s2-p4`, `s3-p1` do `s3-p5`), a sve odjednom radi
+`make all`. Detalji i očekivani ishodi su u odjeljku "Upotreba make-a" niže. Za `s3-p4` mora raditi Docker Desktop.
+
+### 9. Čišćenje
+
+```bash
+make clean-all
+```
+
+Uklanja sve što su primjeri napravili (datoteke, state, kontejnere, kind klaster).
+
 ## Šta je potrebno
 
 Sve se pokreće u **Linux okruženju**: Ubuntu 24.04 ili **WSL2** na Windowsu (obaveza iz sillabusa).
@@ -67,20 +173,6 @@ Za rad se koristi isključivo **Terraform** (ne OpenTofu).
   virsh -c qemu:///system pool-start default
   virsh -c qemu:///system net-start default
   ```
-
-## Početak
-
-**Repozitorij kloniraj unutar Linux fajl sistema (`~/`), ne u `/mnt/c/...`.** Ansible ignoriše `ansible.cfg` u direktoriju
-kojem svi mogu pisati (a to je `/mnt/c`), pa Vault i uloge tamo ne rade ispravno.
-
-```bash
-cd ~
-git clone <URL-OVOG-REPOZITORIJA> RuO-2026-27
-cd RuO-2026-27
-./00-setup.sh      # instalacija alata (jednom)
-make check        # koji alati su instalirani
-make help         # popis svih ciljeva
-```
 
 ## Upotreba make-a
 
