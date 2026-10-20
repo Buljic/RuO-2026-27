@@ -20,7 +20,7 @@ Sve se pokreće u **Linux okruženju**: Ubuntu 24.04 ili **WSL2** na Windowsu (o
 | Alat | Potreban za | Napomena |
 |---|---|---|
 | `git`, `make` | sve | `sudo apt install -y git make` |
-| Terraform **ili** OpenTofu | `s2/*`, `s3/p3` | s OpenTofu: `make TF=tofu ...` |
+| Terraform | `s2/*`, `s3/p3` | HashiCorp apt repozitorij |
 | Ansible | `s3/p1`, `s3/p2`, `s3/p3` | `sudo apt install -y ansible` |
 | Docker + Compose | `s3/p4`, kind | Docker Desktop (WSL integracija) ili Docker Engine |
 | Packer | `s2/p4` | HashiCorp apt repozitorij (niže) |
@@ -29,28 +29,28 @@ Sve se pokreće u **Linux okruženju**: Ubuntu 24.04 ili **WSL2** na Windowsu (o
 
 Za većinu primjera **nije potreban račun u oblaku i ništa ne košta**. Nijedan primjer ne koristi plaćene usluge.
 
-### Instalacija (Ubuntu / WSL2)
+### Instalacija: prva skripta `00-setup.sh`
+
+Sve potrebno postavlja jedna skripta (Ubuntu/Debian ili WSL2 Ubuntu). Pokreće se kao običan korisnik, a `sudo` traži sama:
 
 ```bash
-sudo apt update
-sudo apt install -y git make curl gnupg ansible \
-  qemu-kvm libvirt-daemon-system libvirt-clients virtinst genisoimage
-
-# HashiCorp repozitorij: Terraform i Packer
-wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-sudo apt update && sudo apt install -y terraform packer
-
-# libvirt: dodati korisnika u grupe, zatim odjava i ponovna prijava
-sudo usermod -aG libvirt,kvm $USER
+./00-setup.sh        # ili: make setup
 ```
 
-Za Kubernetes primjer (neobavezno):
+Šta radi (idempotentno, može se pokrenuti više puta):
 
-```bash
-curl -Lo kubectl "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && sudo install kubectl /usr/local/bin/kubectl
-curl -Lo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64 && sudo install kind /usr/local/bin/kind
-```
+1. provjerava okruženje (Linux, apt, WSL2; ako treba, uključuje `systemd` u `/etc/wsl.conf`),
+2. instalira `git`, `make`, `curl`, `ansible`,
+3. dodaje HashiCorp repozitorij i instalira **Terraform** i **Packer**,
+4. instalira KVM/libvirt, dodaje korisnika u grupe `libvirt`/`kvm`, pokreće `libvirtd` i pravi pool i mrežu `default`,
+5. provjerava Docker (sa `INSTALL_DOCKER=1` ga instalira ako ga nema),
+6. instalira `kubectl` i `kind`,
+7. pravi SSH ključ `~/.ssh/id_ed25519` ako ne postoji (koristi se u VM primjerima),
+8. ispisuje provjeru instaliranih alata.
+
+Opcije: `SKIP_LIBVIRT=1` (bez KVM-a), `SKIP_K8S=1` (bez kubectl/kind), `INSTALL_DOCKER=1`.
+Nakon prvog pokretanja treba se odjaviti i ponovo prijaviti (WSL: `wsl --shutdown`) da bi članstvo u grupama počelo važiti.
+Za rad se koristi isključivo **Terraform** (ne OpenTofu).
 
 ### Posebne napomene za WSL2
 
@@ -77,6 +77,7 @@ kojem svi mogu pisati (a to je `/mnt/c`), pa Vault i uloge tamo ne rade ispravno
 cd ~
 git clone <URL-OVOG-REPOZITORIJA> RuO-2026-27
 cd RuO-2026-27
+./00-setup.sh      # instalacija alata (jednom)
 make check        # koji alati su instalirani
 make help         # popis svih ciljeva
 ```
@@ -89,7 +90,6 @@ ispisuje svaku naredbu koja se izvršava, pa je jasno šta se radi. Isto radi i 
 ```bash
 make s2-p1                    # pokreni primjer
 make s2-p1-clean              # očisti ga (destroy + brisanje statea)
-make TF=tofu s2-p1            # isti primjer s OpenTofu umjesto Terraforma
 make ANSIBLE_ARGS= s3-p1      # ako sudo ne traži lozinku (bez -K)
 ```
 

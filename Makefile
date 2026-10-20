@@ -7,15 +7,13 @@ SHELL := /bin/bash
 .RECIPEPREFIX := >
 .DEFAULT_GOAL := help
 
-# za OpenTofu: make TF=tofu ...
-TF ?= terraform
 # -K traži sudo lozinku (become); ako sudo ne traži lozinku: make ANSIBLE_ARGS= ...
 ANSIBLE_ARGS ?= -K
 EX ?=
 
 banner = printf '\n\033[1;36m== %s\033[0m\n' '$(1)'
 
-.PHONY: help check run ssh-key safe-all clean-all \
+.PHONY: help setup check run ssh-key safe-all clean-all \
   s2-p1 s2-p1-clean s2-p2 s2-p3 s2-p3-apply s2-p3-clean \
   s2-p4 s2-p4-build s2-p4-vm s2-p4-clean \
   s3-p1 s3-p1-apply s3-p2-vault s3-p2 s3-p2-apply s3-p3 s3-p3-apply s3-p3-clean \
@@ -26,8 +24,11 @@ help: ## ovaj popis
 > @awk 'BEGIN{FS=":.*## "} /^##@/{printf "\n\033[1m%s\033[0m\n", substr($$0,5)} /^[a-zA-Z0-9_-]+:.*## /{printf "  \033[36m%-16s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 > @printf '\nPrimjer: make s2-p1   ili   make run EX=s2-p1\n'
 
+setup: ## instalira sve alate (00-setup.sh)
+> ./00-setup.sh
+
 check: ## provjera da li su alati instalirani
-> @for t in git make terraform tofu packer ansible docker kubectl kind virsh; do \
+> @for t in git make terraform packer ansible docker kubectl kind virsh; do \
 >   if command -v $$t >/dev/null; then printf '  \033[32mok\033[0m     %s\n' $$t; else printf '  \033[33mnema\033[0m   %s\n' $$t; fi; done
 
 run: ## make run EX=s2-p1 (isto što i make s2-p1)
@@ -40,20 +41,20 @@ ssh-key:
 ##@ Sedmica 2: IaC i virtualne mašine kao kod
 s2-p1: ## Terraform bez oblaka: idempotentnost, state, drift (lokalno, besplatno)
 > @$(call banner,1. init i plan)
-> cd s2/p1 && $(TF) init -input=false && $(TF) plan
+> cd s2/p1 && terraform init -input=false && terraform plan
 > @$(call banner,2. apply: kreira datoteku)
-> cd s2/p1 && $(TF) apply -auto-approve
+> cd s2/p1 && terraform apply -auto-approve
 > @$(call banner,3. apply ponovo: ocekujemo 0 added / 0 changed = idempotentnost)
-> cd s2/p1 && $(TF) apply -auto-approve && cat pozdrav.txt && $(TF) state list
+> cd s2/p1 && terraform apply -auto-approve && cat pozdrav.txt && terraform state list
 > @$(call banner,4. promjena varijable: plan pokazuje zamjenu resursa)
-> cd s2/p1 && $(TF) plan -var ime=Studenti | grep -E 'forces replacement|Plan:' || true
+> cd s2/p1 && terraform plan -var ime=Studenti | grep -E 'forces replacement|Plan:' || true
 > @$(call banner,5. DRIFT: datoteku mijenjamo rucno izvan Terraforma)
 > echo "ručno izmijenjeno" > s2/p1/pozdrav.txt
-> cd s2/p1 && $(TF) plan -refresh-only
+> cd s2/p1 && terraform plan -refresh-only
 > @$(call banner,6. apply vraca stvarno stanje na ono iz koda)
-> cd s2/p1 && $(TF) apply -auto-approve && cat pozdrav.txt
+> cd s2/p1 && terraform apply -auto-approve && cat pozdrav.txt
 s2-p1-clean: ## uklanja resurse i state za s2-p1
-> cd s2/p1 && { $(TF) destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate* pozdrav.txt
+> cd s2/p1 && { terraform destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate* pozdrav.txt
 
 s2-p2: ## cloud-init: provjera user-data
 > @head -1 s2/p2/user-data | grep -qx '#cloud-config' && echo "prvi red je #cloud-config"
@@ -61,20 +62,20 @@ s2-p2: ## cloud-init: provjera user-data
 >  else python3 -c "import yaml; yaml.safe_load(open('s2/p2/user-data')); print('YAML ispravan (cloud-init nije instaliran, provjeren samo YAML)')"; fi
 
 s2-p3: ssh-key ## Terraform + libvirt VM: init, validate, PLAN (bez kreiranja)
-> cd s2/p3 && $(TF) init -input=false && $(TF) validate && $(TF) plan -out=tfplan
+> cd s2/p3 && terraform init -input=false && terraform validate && terraform plan -out=tfplan
 s2-p3-apply: s2-p3 ## [opcionalno] stvarno kreira VM (traži KVM/libvirt)
-> cd s2/p3 && $(TF) apply tfplan && $(TF) output
+> cd s2/p3 && terraform apply tfplan && terraform output
 s2-p3-clean: ## uklanja VM i state
-> cd s2/p3 && { $(TF) destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate* tfplan
+> cd s2/p3 && { terraform destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate* tfplan
 
 s2-p4: ## Packer: init i validate (bez izgradnje slike)
 > cd s2/p4 && packer init . && packer validate .
 s2-p4-build: s2-p4 ## [opcionalno] gradi sliku (~4 min, ~640 MB, traži KVM)
 > cd s2/p4 && packer build .
 s2-p4-vm: ssh-key ## plan VM-a iz Packer slike (slika mora postojati: s2-p4-build)
-> cd s2/p4/vm && $(TF) init -input=false && $(TF) validate && $(TF) plan
+> cd s2/p4/vm && terraform init -input=false && terraform validate && terraform plan
 s2-p4-clean: ## briše sliku i state VM-a
-> rm -rf s2/p4/output; cd s2/p4/vm && { $(TF) destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate*
+> rm -rf s2/p4/output; cd s2/p4/vm && { terraform destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate*
 
 ##@ Sedmica 3: konfiguracija i kontejneri kao kod
 s3-p1: ## Ansible: ping, syntax-check, --check --diff (bez izmjena sistema)
@@ -103,12 +104,12 @@ s3-p2-apply: s3-p2-vault ## [opcionalno] stvarno primjenjuje rolu
 
 s3-p3: s3-p2-vault ssh-key ## Terraform + Ansible: PLAN i syntax-check (bez kreiranja VM-a)
 > mkdir -p s3/p3/group_vars/web && cp s3/p2/group_vars/web/vault.yml s3/p3/group_vars/web/vault.yml
-> cd s3/p3 && $(TF) init -input=false && $(TF) validate && $(TF) plan -out=tfplan
+> cd s3/p3 && terraform init -input=false && terraform validate && terraform plan -out=tfplan
 > cd s3/p3 && ansible-playbook -i localhost, site.yml --syntax-check
 s3-p3-apply: s3-p3 ## [opcionalno] kreira VM i konfiguriše je (deploy.sh)
-> cd s3/p3 && bash deploy.sh && curl -s http://$$($(TF) output -raw ip)
+> cd s3/p3 && bash deploy.sh && curl -s http://$$(terraform output -raw ip)
 s3-p3-clean: ## uklanja VM, inventory i state
-> cd s3/p3 && { $(TF) destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate* tfplan inventory.ini
+> cd s3/p3 && { terraform destroy -auto-approve || true; } && rm -rf .terraform terraform.tfstate* tfplan inventory.ini
 
 s3-p4-config: ## Compose: samo provjera datoteke
 > cd s3/p4 && docker compose config -q && echo "compose.yaml je ispravan"
