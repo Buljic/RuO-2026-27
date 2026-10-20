@@ -68,9 +68,10 @@ else
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     qemu-kvm libvirt-daemon-system libvirt-clients virtinst genisoimage
   for g in libvirt kvm; do
-    if ! id -nG "$USER" | tr ' ' '\n' | grep -qx "$g"; then
-      sudo usermod -aG "$g" "$USER"; NEED_RELOGIN=1
-    fi
+    case " $(id -nG "$USER") " in
+      *" $g "*) ;;
+      *) sudo usermod -aG "$g" "$USER"; NEED_RELOGIN=1 ;;
+    esac
   done
   if [ "$HAS_SYSTEMD" = 1 ]; then
     sudo systemctl enable --now libvirtd
@@ -136,9 +137,10 @@ step "8/8 Provjera"
 for t in git make terraform packer ansible docker kubectl kind virsh; do
   if have "$t"; then ok "$t"; else warn "$t nije instaliran"; fi
 done
-have terraform && terraform version | head -1
-have ansible && ansible --version | head -1
-have packer && packer version
+# sed -n 1p cita cijeli ulaz (head -1 bi uz pipefail prekinuo skriptu zbog SIGPIPE)
+have terraform && terraform version | sed -n 1p
+have ansible && ansible --version | sed -n 1p
+have packer && packer version | sed -n 1p
 true
 
 printf '\n%sGotovo.%s Sljedeći koraci: make check, make help, make s2-p1\n' "$c_ok" "$c_off"
