@@ -239,7 +239,7 @@ Spore korake (preuzimanje Ubuntu slike, `packer build`, `kind create cluster`) p
 
 ## Dokumentacija
 
-Bilješke s predavanja su u [`docs/`](docs/) (PDF). Izvor (HTML) je u `docs/src/`, a PDF se generiše naredbom
+Sillabus i bilješke s predavanja su u [`docs/`](docs/) (PDF): [`RuO-Syllabus.pdf`](docs/RuO-Syllabus.pdf), `RuO - Lesson1.pdf` (sedmica 1), `RuO - Lesson2.pdf` i `RuO - Lesson3.pdf`. Izvor (HTML) je u `docs/src/`, a PDF se generiše naredbom
 `python docs/src/build.py` (potreban Edge, Chrome ili Chromium).
 
 ## Tajne i Git
