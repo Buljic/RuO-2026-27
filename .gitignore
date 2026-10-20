@@ -1,0 +1,21 @@
+# Terraform / OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+crash.log
+# lokalno generisano
+s2/p1/pozdrav.txt
+s3/p3/inventory.ini
+# Packer slike
+s2/p4/output/
+*.qcow2
+# tajne: NIKAD u Git
+.vault_pass
+s3/p2/group_vars/web/vault.yml
+s3/p3/group_vars/web/vault.yml
+# ostalo
+__pycache__/
+*.retry

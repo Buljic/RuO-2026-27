@@ -1,0 +1,6 @@
+#cloud-config
+ssh_pwauth: true
+chpasswd:
+  expire: false
+  users:
+    - { name: ubuntu, password: packer, type: text }

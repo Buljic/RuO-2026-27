@@ -1,0 +1,23 @@
+- name: nginx je instaliran
+  ansible.builtin.apt: { name: nginx, state: present, cache_valid_time: 3600 }
+
+- name: početna stranica
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: /var/www/html/index.html
+    mode: "0644"
+  notify: reload nginx
+
+- name: direktorij za konfiguraciju aplikacije
+  ansible.builtin.file: { path: /etc/ruo, state: directory, mode: "0750" }
+
+- name: tajna aplikacije (samo root može čitati)
+  ansible.builtin.template:
+    src: app.env.j2
+    dest: /etc/ruo/app.env
+    owner: root
+    mode: "0600"
+  no_log: true                 # vrijednost se ne ispisuje u izlazu
+
+- name: nginx radi
+  ansible.builtin.service: { name: nginx, state: started, enabled: true }

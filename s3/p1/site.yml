@@ -1,0 +1,31 @@
+- name: Web server
+  hosts: web
+  become: true
+  vars:
+    naslov: "Računarstvo u oblaku, sedmica 3"
+  tasks:
+    - name: nginx je instaliran
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: početna stranica iz šablona
+      ansible.builtin.template:
+        src: index.html.j2
+        dest: /var/www/html/index.html
+        mode: "0644"
+      notify: reload nginx
+
+    - name: nginx radi i uključen je pri pokretanju
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+  handlers:
+    - name: reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded

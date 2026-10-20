@@ -1,0 +1,25 @@
+#cloud-config
+hostname: web1
+users:
+  - name: student
+    groups: [sudo]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true                 # prijava samo ključem
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEKEYONLYREPLACEWITHYOURS student@racunar
+
+package_update: true
+packages:
+  - nginx
+  - curl
+
+write_files:
+  - path: /var/www/html/index.html
+    permissions: "0644"
+    content: |
+      <h1>web1: konfigurisano cloud-initom</h1>
+
+runcmd:
+  - systemctl enable --now nginx
+  - echo "cloud-init gotov $(date -Is)" >> /var/log/ruo-init.log

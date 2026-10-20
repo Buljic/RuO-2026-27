@@ -1,0 +1,3 @@
+# Primjer sadržaja. Prava datoteka (vault.yml) se pravi naredbom `make s3-p2-vault`,
+# šifruje se Ansible Vaultom i NIJE u Gitu.
+vault_db_password: "LabLozinka-123"
