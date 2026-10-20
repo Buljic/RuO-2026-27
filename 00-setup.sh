@@ -66,7 +66,7 @@ if [ "$SKIP_LIBVIRT" = 1 ]; then
   warn "preskočeno (SKIP_LIBVIRT=1)"
 else
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    qemu-kvm libvirt-daemon-system libvirt-clients virtinst genisoimage
+    qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst genisoimage
   for g in libvirt kvm; do
     case " $(id -nG "$USER") " in
       *" $g "*) ;;
