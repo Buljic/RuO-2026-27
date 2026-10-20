@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="bs"><head><meta charset="utf-8">
+<title>RuO – Bilješke s predavanja – Sedmica 2</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="top"><img src="logo.png" alt="Univerzitet u Zenici, Politehnički fakultet"><div class="uni"><b>Univerzitet u Zenici</b><span>Politehnički fakultet</span></div></header>
+
+<div class="kicker">Bilješke s predavanja · Sedmica 2</div>
+<h1>Uvod u IaC: virtualne mašine kao kod</h1>
+<p class="lead">Principi Infrastructure as Code pristupa (deklarativnost, idempotentnost, state, drift) i prvi praktični alati: <code>Terraform</code>, <code>cloud-init</code> i <code>Packer</code>, na lokalnom KVM/QEMU/libvirt okruženju.</p>
+
+<table class="meta">
+<tr><td>Predmet</td><td>Računarstvo u oblaku</td></tr>
+<tr><td>Studij</td><td>II ciklus studija, III semestar, akademska godina 2026/27</td></tr>
+<tr><td>Nastavnik</td><td>V. prof. dr. Đulaga Hadžić</td></tr>
+<tr><td>Asistent</td><td>ass. Mr. Adin Jahić</td></tr>
+<tr><td>Termin</td><td>petak, 23.10.2026, 17:15–20:15, Kabinet 3204</td></tr>
+<tr><td>Tema</td><td>Uvod u IaC: virtualne mašine kao kod</td></tr>
+<tr><td>Kod</td><td>github.com/Dadyze/RuO-2026-27 (mape <code>s2/p1</code> do <code>s2/p4</code>)</td></tr>
+</table>
+
+<section>
+<div class="kicker">Okvir nastavne jedinice</div>
+<h2>Ciljevi i način rada</h2>
+<p>U prvoj sedmici je kontejner razložen na mehanizme jezgra, a hipervizor (KVM/QEMU, libvirt) predstavljen kao drugi način izolacije. Ova sedmica odgovara na praktično pitanje: <em>kako se virtualne mašine prave na način koji je ponovljiv, provjerljiv i verzioniran?</em> Infrastruktura se opisuje tekstualnim datotekama u Git repozitoriju, a alat zadužen za izvršavanje dovodi stvarno stanje u skladu s opisom.</p>
+<p>Svi primjeri rade <strong>lokalno</strong>, na vašem računaru: nema računa u oblaku i nema troškova. Resursi koje Terraform pravi su datoteke i KVM virtualne mašine, a ne AWS ili Azure instance. Gradivo ide od jednostavnog prema složenom: prvi primjer upravlja jednom datotekom i služi da se na najmanjem slučaju vide svi principi, a svaki sljedeći dodaje jedan sloj (cloud-init, prava VM, vlastita slika).</p>
+<p>Nakon nastavne jedinice student je u stanju:</p>
+<ul>
+<li>objasniti razliku između imperativnog i deklarativnog pristupa i definisati idempotentnost, state i drift,</li>
+<li>objasniti ulogu KVM-a, QEMU-a i libvirt-a i kako Terraform preko providera upravlja virtualnim mašinama,</li>
+<li>napisati Terraform konfiguraciju i voditi tok <code>init → plan → apply → destroy</code>,</li>
+<li>napisati cloud-init <code>user-data</code> i objasniti kako VM dobija konfiguraciju pri prvom pokretanju,</li>
+<li>izgraditi "zlatnu" sliku Packerom i razlikovati ulogu Terraforma, Packera, cloud-inita i Ansible-a,</li>
+<li>pokrenuti sve primjere naredbom <code>make</code> i provjeriti da su idempotentni.</li>
+</ul>
+
+<h3>Kako se koristi ovaj materijal</h3>
+<p>Svaki isječak iz ovih bilješki je prava datoteka u repozitoriju, a pokreće se jednom naredbom. Dovoljno je kloniranje, jedno pokretanje skripte za instalaciju i zatim <code>make</code> po primjerima, redom.</p>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 0 · početak (u Linux/WSL2 home direktoriju)</span></div><pre>cd ~
+git clone https://github.com/Dadyze/RuO-2026-27.git
+cd RuO-2026-27
+./00-setup.sh      # jednom: instalira sve alate (objašnjeno u 4. poglavlju)
+make check         # koji alati postoje
+make help          # popis svih primjera
+make s2-p1         # prvi primjer; zatim s2-p2, s2-p3, s2-p4 (ili: make all)</pre></div>
+<div class="note warn"><span class="lbl">Važno</span>Repozitorij klonirati u Linux fajl sistem (<code>~/</code>), ne u <code>/mnt/c/...</code>. Na Windows disku svi imaju pravo pisanja, pa Ansible (sedmica 3) ignoriše <code>ansible.cfg</code>.</div>
+</section>
+
+<section>
+<div class="kicker">1 · Motivacija</div>
+<h2>Zašto infrastruktura kao kod</h2>
+<p>Klasičan način rada je ručan: administrator se prijavi na server, instalira pakete, uredi konfiguraciju, otvori port. Taj pristup (u žargonu <em>ClickOps</em>) ima ponavljajuće probleme:</p>
+<table class="t">
+<tr><th>Problem</th><th>Posljedica</th></tr>
+<tr><td>Ručne izmjene se ne bilježe</td><td>Nema odgovora ko je, kada i zašto promijenio konfiguraciju.</td></tr>
+<tr><td>Server je "snowflake" (jedinstven)</td><td>Ako ga izgubimo, ne znamo ga ponovo napraviti. Test i produkcija se razilaze.</td></tr>
+<tr><td>Ponavljanje je sporo i podložno grešci</td><td>Deset servera znači deset ručnih postupaka i deset blago različitih rezultata.</td></tr>
+<tr><td>Nema pregleda prije izmjene</td><td>Greška se otkriva tek kad nešto prestane raditi.</td></tr>
+</table>
+<p>IaC to rješava tako što se željeno stanje zapisuje kao kod, a kod se tretira kao svaki drugi softver: verzionira se u Gitu, pregleda (pull request), testira i izvršava automatski. Infrastruktura postaje <strong>ponovljiva</strong>, <strong>provjerljiva</strong> (historija je u Gitu) i <strong>dokumentovana</strong> (kod je dokumentacija koja ne može zastarjeti).</p>
+<div class="note"><span class="lbl">Radna teza</span>Infrastruktura se ne <em>održava</em>, ona se <em>opisuje</em>. Ako server treba promijeniti, mijenja se opis i ponovo se izvršava, a ne uređuje se server.</div>
+<p>Poznata metafora: server kao <em>kućni ljubimac</em> (pet) ima ime, njeguje se ručno i žali se kad pogine. Server kao <em>stoka</em> (cattle) ima broj, napravljen je iz koda i zamijeni se novim kad zakaže. IaC vodi prema stoci.</p>
+</section>
+
+<section>
+<div class="kicker">2 · Principi</div>
+<h2>Deklarativno, idempotentno, state, drift</h2>
+
+<h3>2.1 Imperativno naspram deklarativnog</h3>
+<p><strong>Imperativni</strong> pristup opisuje <em>korake</em> ("napravi ovo, pa ovo"). <strong>Deklarativni</strong> pristup opisuje <em>željeno stanje</em> ("treba postojati ovo"), a alat sam izračuna koji su koraci potrebni da se do njega dođe iz trenutnog stanja.</p>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 1 · imperativno (ilustracija)</span></div><pre>#!/bin/bash
+# kreiraj_vm.sh: drugo pokretanje puca jer VM već postoji
+virt-install --name web1 --memory 1024 --vcpus 1 \
+  --disk size=10 --import --os-variant ubuntu24.04 --noautoconsole</pre></div>
+<div class="code"><div class="hd"><span>hcl</span><span>Isječak 2 · deklarativno (ilustracija)</span></div><pre>resource "libvirt_domain" "web1" {
+  name   = "web1"
+  memory = 1024
+  vcpu   = 1
+}
+# "treba postojati VM web1 s 1 GiB memorije". Postoji li već, ne radi se ništa.</pre></div>
+<p>Skripta iz isječka 1 vrijedi za jedan početni slučaj: prvi put napravi VM, drugi put javlja grešku, a ako se memorija promijeni, ne pomaže ni to. Deklarativni zapis pokriva sva tri slučaja jer alat poredi željeno i stvarno stanje.</p>
+
+<h3>2.2 Idempotentnost</h3>
+<p>Operacija je <strong>idempotentna</strong> ako njeno ponovljeno izvršavanje daje isti rezultat kao jedno izvršavanje. U IaC-u to znači da se kod može bezbrižno pokrenuti više puta: ako je sistem već u željenom stanju, ništa se ne mijenja. To je preduslov za automatizaciju jer se isti kod izvršava pri svakoj izmjeni, a ne samo prvi put. Provjera je jednostavna: <em>drugo izvršavanje ne smije prijaviti nijednu promjenu</em>. Ova pravila važe i za sam repozitorij: svaki <code>make</code> cilj se može pokrenuti ponovo.</p>
+
+<h3>2.3 State</h3>
+<p>Alat mora znati šta je <em>on</em> napravio. Terraform to bilježi u datoteci <strong>state</strong> (<code>terraform.tfstate</code>) koja svaki resurs iz koda povezuje s konkretnim objektom u stvarnom svijetu (ID, atributi). Bez statea bi svaki <code>apply</code> morao pogađati šta je već napravljeno.</p>
+<ul>
+<li>State sadrži <strong>osjetljive podatke</strong> (lozinke, ključevi u čistom tekstu). Zato se nikad ne ubacuje u Git (<code>.gitignore</code>).</li>
+<li>Pri radu u timu state se čuva u <strong>udaljenom backendu</strong> s <em>zaključavanjem</em>, da dvije osobe ne izvršavaju <code>apply</code> istovremeno. U ovom kursu je state lokalna datoteka pored koda.</li>
+<li>Pregled: <code>terraform state list</code>, <code>terraform state show &lt;resurs&gt;</code>. Postojeći objekt se preuzima u state naredbom <code>terraform import</code>.</li>
+</ul>
+
+<h3>2.4 Drift</h3>
+<p><strong>Drift</strong> je razlika između stanja zapisanog u kodu i stvarnog stanja, nastala izmjenom izvan alata (neko ručno promijeni konfiguraciju ili obriše resurs). Terraform drift otkriva pri svakom <code>plan</code> pozivu tako što prvo osvježi state (<em>refresh</em>), a zatim ga poredi s kodom. Samo otkrivanje, bez planiranja izmjena, radi <code>terraform plan -refresh-only</code>. Ispravlja se tako što <code>apply</code> vraća stvarno stanje na ono iz koda (ili se kod prilagodi ako je promjena bila namjerna).</p>
+
+<figure>
+<svg viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif" font-size="12">
+<rect x="10" y="20" width="140" height="64" rx="8" fill="#e3f3f0" stroke="#0f766e"/><text x="80" y="48" text-anchor="middle" font-weight="700">Kod (.tf)</text><text x="80" y="66" text-anchor="middle" fill="#55677a">željeno stanje</text>
+<rect x="290" y="20" width="140" height="64" rx="8" fill="#eef2f6" stroke="#55677a"/><text x="360" y="48" text-anchor="middle" font-weight="700">State</text><text x="360" y="66" text-anchor="middle" fill="#55677a">ono što je napravljeno</text>
+<rect x="570" y="20" width="140" height="64" rx="8" fill="#e3f3f0" stroke="#0f766e"/><text x="640" y="48" text-anchor="middle" font-weight="700">Stvarnost</text><text x="640" y="66" text-anchor="middle" fill="#55677a">VM, mreža, diskovi</text>
+<path d="M150 52H290" stroke="#12212b" marker-end="url(#a)"/><path d="M430 52H570" stroke="#12212b" marker-end="url(#a)"/>
+<text x="220" y="44" text-anchor="middle" fill="#55677a">plan</text><text x="500" y="44" text-anchor="middle" fill="#55677a">provider</text>
+<rect x="10" y="130" width="700" height="62" rx="8" fill="#fdf1e0" stroke="#b45309"/>
+<text x="360" y="154" text-anchor="middle" font-weight="700" fill="#b45309">Drift: neko ručno mijenja stvarnost, a kod i state to ne znaju</text>
+<text x="360" y="174" text-anchor="middle" fill="#55677a">plan → refresh → poređenje otkriva razliku; apply je ispravlja</text>
+<path d="M640 130V84" stroke="#b45309" stroke-dasharray="4 3" marker-end="url(#b)"/>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="#12212b"/></marker><marker id="b" markerWidth="8" markerHeight="8" refX="4" refY="1" orient="auto"><path d="M0 8L4 0L8 8z" fill="#b45309"/></marker></defs>
+</svg>
+<figcaption>Slika 1. Tri izvora istine: kod, state i stvarnost. Terraform stalno poredi sva tri, a drift nastaje kad se promijeni stvarnost mimo koda.</figcaption>
+</figure>
+
+<h3>2.5 Promjenjiva i nepromjenjiva infrastruktura</h3>
+<table class="t">
+<tr><th>Pristup</th><th>Ideja</th><th>Alat</th></tr>
+<tr><td>Promjenjiva (<em>mutable</em>)</td><td>Server postoji i na njemu se mijenjaju paketi i konfiguracija. Dugim radom se razilazi od opisa.</td><td>Ansible (sedmica 3)</td></tr>
+<tr><td>Nepromjenjiva (<em>immutable</em>)</td><td>Server se ne mijenja. Za svaku izmjenu pravi se nova slika i zamijeni se stari server.</td><td>Packer + Terraform</td></tr>
+</table>
+<p>U praksi se kombinuju: slika sadrži ono što se rijetko mijenja, a ono što zavisi od okruženja (hostname, ključevi, adrese) dodaje se pri prvom pokretanju, što je posao cloud-inita.</p>
+</section>
+
+<section>
+<div class="kicker">3 · Pozadina</div>
+<h2>Virtualizacija na Linuxu: KVM, QEMU i libvirt</h2>
+<p>Primjeri 3 i 4 prave prave virtualne mašine, pa je potrebno znati od čega se okruženje sastoji. U prvoj sedmici je rečeno da hipervizor daje svakoj mašini vlastito jezgro. Na Linuxu tu ulogu ne igra jedan program, nego tri sloja koji se često miješaju:</p>
+<figure>
+<svg viewBox="0 0 720 270" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif" font-size="12">
+<rect x="10" y="10" width="330" height="40" rx="6" fill="#e3f3f0" stroke="#0f766e"/><text x="175" y="35" text-anchor="middle" font-weight="700">Terraform + libvirt provider</text>
+<rect x="10" y="62" width="330" height="40" rx="6" fill="#e3f3f0" stroke="#0f766e"/><text x="175" y="87" text-anchor="middle" font-weight="700">libvirt (libvirtd, virsh, XML)</text>
+<rect x="10" y="114" width="330" height="40" rx="6" fill="#e3f3f0" stroke="#0f766e"/><text x="175" y="139" text-anchor="middle" font-weight="700">QEMU (proces: uređaji, disk, mreža)</text>
+<rect x="10" y="166" width="330" height="40" rx="6" fill="#e3f3f0" stroke="#0f766e"/><text x="175" y="191" text-anchor="middle" font-weight="700">KVM (jezgro Linuxa, /dev/kvm)</text>
+<rect x="10" y="218" width="330" height="40" rx="6" fill="#eef2f6" stroke="#55677a"/><text x="175" y="243" text-anchor="middle" font-weight="700">CPU: Intel VT-x / AMD-V</text>
+<g fill="#55677a">
+<text x="360" y="35">piše se kod: željeno stanje</text>
+<text x="360" y="87">upravlja životnim ciklusom: define, start, stop, mreže, diskovi</text>
+<text x="360" y="139">pravi "hardver" gostu: virtio disk, NIC, BIOS/UEFI</text>
+<text x="360" y="191">pušta gosta da izvršava instrukcije direktno na CPU-u</text>
+<text x="360" y="243">hardverska podrška za virtualizaciju</text></g>
+</svg>
+<figcaption>Slika 2. Slojevi KVM virtualizacije. Terraform ne zna ništa o QEMU-u ili KVM-u: razgovara samo s libvirt-om.</figcaption>
+</figure>
+<table class="t">
+<tr><th>Pojam</th><th>Šta je i zašto je tu</th></tr>
+<tr><td><strong>KVM</strong></td><td><em>Kernel-based Virtual Machine</em>: modul jezgra Linuxa (<code>kvm</code>, <code>kvm_intel</code>/<code>kvm_amd</code>) koji koristi procesorsku podršku za virtualizaciju. Izlaže uređaj <code>/dev/kvm</code>. Zahvaljujući njemu gostujući kod radi skoro brzinom domaćina. Sam po sebi ne pravi mašine.</td></tr>
+<tr><td><strong>QEMU</strong></td><td>Program u korisničkom prostoru koji <em>pravi uređaje</em> gosta (disk, mrežnu karticu, BIOS/UEFI, konzolu). Svaka VM je jedan <code>qemu-system-x86_64</code> proces. Bez KVM-a QEMU sve emulira softverski (spor, ali radi); uz KVM ubrzava izvršavanje. Zato se kaže "KVM/QEMU".</td></tr>
+<tr><td><strong>libvirt</strong></td><td>Jedinstven API i servis (<code>libvirtd</code>) za upravljanje hipervizorima (KVM/QEMU, Xen, LXC). VM opisuje XML "domenom"; alat <code>virsh</code> je njegov CLI. Terraform provider ga koristi umjesto da sam pokreće QEMU.</td></tr>
+<tr><td><strong>URI <code>qemu:///system</code></strong></td><td>Adresa libvirt servisa: sistemski servis (radi kao root, dijeli resurse). <code>qemu:///session</code> je varijanta po korisniku. Zato korisnik mora biti u grupi <code>libvirt</code>.</td></tr>
+<tr><td><strong>virtio</strong></td><td>Paravirtualizovani uređaji: gost zna da je virtualan i koristi brz zajednički interfejs umjesto emulacije stvarne kartice. Cloud slike ga podrazumijevaju.</td></tr>
+<tr><td><strong>qcow2</strong></td><td><em>QEMU Copy-On-Write v2</em>: format diska koji raste tek kad se piše i podržava <em>backing file</em>. Disk VM-a je potomak bazne slike: čita iz nje, a piše samo svoje razlike. Zato nova VM zauzima malo prostora i nastaje za sekunde.</td></tr>
+<tr><td><strong>Cloud slika</strong></td><td>Gotov, mali disk operativnog sistema (npr. <code>noble-server-cloudimg-amd64.img</code>) s ugrađenim cloud-initom. Ne dolazi s korisnicima ni lozinkama: sve se postavlja pri prvom pokretanju.</td></tr>
+<tr><td><strong>Pool i mreža <code>default</code></strong></td><td>Libvirt pool je direktorij za diskove (<code>/var/lib/libvirt/images</code>). Mreža <code>default</code> je NAT most <code>virbr0</code> (<code>192.168.122.0/24</code>) s DHCP-om (dnsmasq): VM izlazi na internet, ali je izvana nedostupna.</td></tr>
+</table>
+<div class="note bg"><span class="lbl">Pozadina: WSL2</span>WSL2 je i sam lagana virtualna mašina (Hyper-V). Da bi unutar nje radio KVM, potrebna je <em>ugniježđena virtualizacija</em>, što većina novijih računara podržava. Ako <code>/dev/kvm</code> ne postoji, VM primjeri ostaju na nivou <code>plan</code>/<code>validate</code>, što je i dovoljno za razumijevanje.</div>
+</section>
+
+<section>
+<div class="kicker">4 · Skripta 00-setup.sh</div>
+<h2>Šta instalacijska skripta radi i zašto</h2>
+<p>Prva skripta u repozitoriju postavlja kompletno okruženje, da svi studenti rade u istom. Osim praktične koristi, ona je mali primjer iste ideje: <strong>provjeri pa radi</strong>. Svaki korak prvo ispituje stanje (je li alat već tu, postoji li ključ, je li korisnik u grupi) i mijenja samo ono što nedostaje, pa se skripta može pokrenuti više puta (idempotentnost, 2.2).</p>
+<table class="t">
+<tr><th>Korak</th><th>Šta radi</th><th>Zašto</th></tr>
+<tr><td>1. Okruženje</td><td>Provjerava Linux, <code>apt</code>, WSL2; ako treba, upisuje <code>systemd=true</code> u <code>/etc/wsl.conf</code>.</td><td>libvirt je servis koji traži <code>systemd</code>. Bez provjere bi kasnije greške bile nejasne.</td></tr>
+<tr><td>2. Osnovni paketi</td><td><code>git</code>, <code>make</code>, <code>curl</code>, <code>python3-yaml</code>, <code>ansible</code>.</td><td>Alati kojima se pokreću primjeri; <code>make</code> je ulaz u sve.</td></tr>
+<tr><td>3. HashiCorp repozitorij</td><td>Dodaje potpisani apt repozitorij (<code>signed-by</code> ključ), instalira <code>terraform</code> i <code>packer</code>.</td><td>Ubuntu repozitorij nema ove alate. Potpisan repozitorij znači provjeru autentičnosti paketa; ne koristi se zastarjeli <code>apt-key</code>.</td></tr>
+<tr><td>4. KVM i libvirt</td><td><code>qemu-kvm</code>, <code>libvirt-daemon-system</code>, <code>virtinst</code>, <code>genisoimage</code>; dodaje korisnika u grupe <code>libvirt</code> i <code>kvm</code>; pokreće <code>libvirtd</code>; pravi pool i mrežu <code>default</code>.</td><td>Slojevi sa slike 2. Grupe daju pravo na <code>/dev/kvm</code> i libvirt socket bez <code>sudo</code>. <code>genisoimage</code> pravi <code>cidata</code> ISO za cloud-init. Primjeri očekuju resurse imenom <code>default</code>.</td></tr>
+<tr><td>5. Docker</td><td>Provjerava da radi; s <code>INSTALL_DOCKER=1</code> ga instalira.</td><td>Potreban za sedmicu 3. U WSL2 je jednostavniji Docker Desktop.</td></tr>
+<tr><td>6. kubectl i kind</td><td>Preuzima binarne datoteke u <code>/usr/local/bin</code> ako ih nema.</td><td>Za Kubernetes primjer (sedmica 3); <code>kind</code> pravi klaster u Docker kontejnerima.</td></tr>
+<tr><td>7. SSH ključ</td><td>Pravi <code>~/.ssh/id_ed25519</code> ako ne postoji.</td><td>Javni ključ ulazi u VM preko cloud-inita, pa se prijavljujemo bez lozinke.</td></tr>
+<tr><td>8. Provjera</td><td>Ispisuje koji su alati prisutni i njihove verzije.</td><td>Brza potvrda prije prvog primjera.</td></tr>
+</table>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 3 · opcije skripte</span></div><pre>./00-setup.sh                   # sve
+SKIP_LIBVIRT=1 ./00-setup.sh    # bez KVM-a (ako nema /dev/kvm)
+SKIP_K8S=1 ./00-setup.sh        # bez kubectl i kind
+INSTALL_DOCKER=1 ./00-setup.sh  # instalira i Docker Engine</pre></div>
+<p>Nakon prvog pokretanja treba se odjaviti i ponovo prijaviti (u WSL2: <code>wsl --shutdown</code>) jer članstvo u novim grupama počinje važiti tek u novoj sesiji.</p>
+</section>
+
+<section>
+<div class="kicker">5 · Terraform</div>
+<h2>Alat i tok rada</h2>
+<p><strong>Terraform</strong> (HashiCorp, 2014, napisan u jeziku Go) je deklarativni alat koji infrastrukturu opisuje u jeziku <strong>HCL</strong> (<em>HashiCorp Configuration Language</em>). Sam alat ne zna ništa o konkretnim sistemima: to znaju <strong>provideri</strong>, dodaci koje <code>terraform init</code> preuzima iz javnog registra. Postoje provideri za AWS, Azure, Docker, DNS, libvirt, pa čak i za lokalne datoteke. Isti tok rada vrijedi za sve, pa znanje stečeno na lokalnom libvirt-u prelazi na oblak.</p>
+<h3>Građevni blokovi HCL-a</h3>
+<table class="t">
+<tr><th>Blok</th><th>Uloga</th></tr>
+<tr><td><code>terraform { required_providers }</code></td><td>Koji provideri i koje verzije se koriste. Verzija se ograničava (<code>~&gt; 0.8.3</code>) jer nove verzije mogu promijeniti sintaksu.</td></tr>
+<tr><td><code>provider "x" { }</code></td><td>Postavke providera (npr. adresa libvirt servisa).</td></tr>
+<tr><td><code>resource "tip" "ime" { }</code></td><td>Objekt kojim se upravlja. Referencira se kao <code>tip.ime.atribut</code>.</td></tr>
+<tr><td><code>data "tip" "ime" { }</code></td><td>Samo čitanje postojećeg objekta.</td></tr>
+<tr><td><code>variable "ime" { }</code></td><td>Ulazni parametar (<code>-var</code>, <code>terraform.tfvars</code>).</td></tr>
+<tr><td><code>output "ime" { }</code></td><td>Vrijednost koja se ispisuje nakon <code>apply</code> (npr. IP adresa).</td></tr>
+</table>
+<p>Redoslijed izvršavanja se <em>ne</em> piše ručno. Terraform iz referenci među resursima (disk koji koristi bazni volumen) gradi graf zavisnosti, pa sam odredi poredak i paralelizam.</p>
+<h3>Tok rada</h3>
+<table class="t">
+<tr><th>Naredba</th><th>Šta radi</th></tr>
+<tr><td><code>terraform init</code></td><td>Preuzima providere u <code>.terraform/</code> i zaključava verzije u <code>.terraform.lock.hcl</code> (ova datoteka ide u Git).</td></tr>
+<tr><td><code>terraform validate</code></td><td>Provjerava sintaksu i reference.</td></tr>
+<tr><td><code>terraform plan</code></td><td>Osvježava state, poredi s kodom i ispisuje <em>šta bi se uradilo</em>. Ništa ne mijenja. Oznake: <code>+</code> kreiranje, <code>~</code> izmjena, <code>-</code> brisanje, <code>-/+</code> zamjena.</td></tr>
+<tr><td><code>terraform apply</code></td><td>Izvršava plan i upisuje rezultat u state.</td></tr>
+<tr><td><code>terraform destroy</code></td><td>Uklanja sve resurse iz statea.</td></tr>
+</table>
+<div class="note"><span class="lbl">Navika: plan prije apply</span><code>plan</code> se čita kao <em>pull request</em> za infrastrukturu i ne mijenja ništa. Zato je u repozitoriju za VM primjere osnovni cilj samo <code>plan</code>, a <code>apply</code> je opcionalan. Posebno paziti na <code>-/+</code> i <code>-</code> (brisanje podataka).</div>
+</section>
+
+<section>
+<div class="kicker">6 · Primjer 1 · s2/p1</div>
+<h2>Terraform bez oblaka: idempotentnost, state i drift</h2>
+<div class="note bg"><span class="lbl">Pozadina primjera</span>Provider <code>hashicorp/local</code> upravlja običnom datotekom. Resurs je trivijalan, ali se na njemu vide sva četiri principa iz 2. poglavlja i ne treba ni virtualizacija ni račun u oblaku. Zato je to prvi primjer.</div>
+<div class="code"><div class="hd"><span>hcl</span><span>Isječak 4 · s2/p1/main.tf</span></div><pre>terraform {
+  required_providers {
+    local = { source = "hashicorp/local", version = "~&gt; 2.5" }
+  }
+}
+
+variable "ime" {
+  type    = string
+  default = "RuO"
+}
+
+resource "local_file" "pozdrav" {
+  filename        = "${path.module}/pozdrav.txt"
+  content         = "Zdravo, ${var.ime}!\n"
+  file_permission = "0644"
+}
+
+output "putanja" { value = local_file.pozdrav.filename }</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 5 · pokretanje</span></div><pre>make s2-p1          # init, plan, apply, ponovni apply, promjena varijable, drift, ispravak
+make s2-p1-clean    # destroy i brisanje statea</pre></div>
+<p>Cilj <code>make s2-p1</code> vodi kroz šest koraka, svaki s naslovom, a naredbe se ispisuju prije izvršavanja:</p>
+<table class="t">
+<tr><th>Korak</th><th>Šta se vidi</th></tr>
+<tr><td>1. <code>init</code> i <code>plan</code></td><td><code>Plan: 1 to add</code>: datoteka još ne postoji.</td></tr>
+<tr><td>2. <code>apply</code></td><td><code>Apply complete! Resources: 1 added</code>: datoteka je napravljena, a u <code>terraform.tfstate</code> je upisan resurs.</td></tr>
+<tr><td>3. <code>apply</code> ponovo</td><td><code>Resources: 0 added, 0 changed</code>: <strong>idempotentnost</strong>.</td></tr>
+<tr><td>4. promjena varijable</td><td>Plan prikazuje <code>-/+</code> i oznaku <code># forces replacement</code>, prije bilo kakve izmjene.</td></tr>
+<tr><td>5. ručna izmjena datoteke</td><td><code>plan -refresh-only</code> otkriva <strong>drift</strong> (datoteka je izmijenjena izvan Terraforma).</td></tr>
+<tr><td>6. <code>apply</code></td><td>Stvarno stanje se vraća na ono iz koda: <code>Zdravo, RuO!</code></td></tr>
+</table>
+<div class="out"><div class="hd">izlaz koraka 3 i 6 (skraćeno)</div><pre>Apply complete! Resources: 0 added, 0 changed, 0 destroyed.     # korak 3
+local_file.pozdrav
+...
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.     # korak 6
+Zdravo, RuO!</pre></div>
+<div class="note"><span class="lbl">Detalj ovog providera</span>Provider <code>local</code> identitet resursa veže za hash sadržaja, pa izmijenjenu datoteku prijavljuje kao "obrisanu" i ponovo je kreira. Kod drugih providera (npr. memorija VM-a) isti drift se prikazuje kao <code>~ update in-place</code>. Princip je isti: razlika se uoči u <code>plan</code>, a <code>apply</code> je ispravlja.</div>
+</section>
+
+<section>
+<div class="kicker">7 · cloud-init · Primjer 2 · s2/p2</div>
+<h2>Konfiguracija pri prvom pokretanju</h2>
+<div class="note bg"><span class="lbl">Pozadina</span><strong>cloud-init</strong> je standardni alat u slikama oblaka (razvio ga je Canonical za Ubuntu na AWS-u, danas ga koriste skoro sve cloud slike). Pri <em>prvom</em> pokretanju čita konfiguraciju iz izvora podataka (<em>datasource</em>) i primjenjuje je: hostname, korisnici i SSH ključevi, paketi, datoteke, naredbe. Na AWS-u se konfiguracija čita sa metadata servisa. U lokalnom KVM/libvirt okruženju koristi se datasource <em>NoCloud</em>: mala ISO slika s oznakom <code>cidata</code> koja se priključi VM-u kao CD. Zato je u skripti instaliran <code>genisoimage</code>: Terraform provider i Packer njime prave tu ISO sliku.</div>
+<table class="t">
+<tr><th>Datoteka</th><th>Sadržaj</th></tr>
+<tr><td><code>user-data</code></td><td>Šta se radi na mašini. Počinje redom <code>#cloud-config</code>.</td></tr>
+<tr><td><code>meta-data</code></td><td>Identitet instance (<code>instance-id</code>). Kad se promijeni, cloud-init to smatra novom mašinom i ponovo se izvršava.</td></tr>
+<tr><td><code>network-config</code></td><td>Opcionalna mrežna konfiguracija.</td></tr>
+</table>
+<div class="code"><div class="hd"><span>yaml</span><span>Isječak 6 · s2/p2/user-data</span></div><pre>#cloud-config
+hostname: web1
+users:
+  - name: student
+    groups: [sudo]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true                 # prijava samo ključem
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA...vas_javni_kljuc student@racunar
+
+package_update: true
+packages: [nginx, curl]
+
+write_files:
+  - path: /var/www/html/index.html
+    permissions: "0644"
+    content: |
+      &lt;h1&gt;web1: konfigurisano cloud-initom&lt;/h1&gt;
+
+runcmd:
+  - systemctl enable --now nginx</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 7 · provjera</span></div><pre>make s2-p2    # prvi red je #cloud-config; cloud-init schema (ili YAML provjera ako cloud-init nije instaliran)</pre></div>
+<div class="note warn"><span class="lbl">Greška koja se često pravi</span>YAML je osjetljiv na uvlačenje, a prvi red mora biti tačno <code>#cloud-config</code>. Pogrešan user-data cloud-init <em>ne prijavi kao grešku pri pokretanju</em>: mašina se podigne bez korisnika, pa se ne možemo prijaviti. Dnevnik je u <code>/var/log/cloud-init-output.log</code>, a stanje daje <code>cloud-init status --long</code>.</div>
+</section>
+
+<section>
+<div class="kicker">8 · Primjer 3 · s2/p3</div>
+<h2>Virtualna mašina u libvirt-u iz Terraforma</h2>
+<div class="note bg"><span class="lbl">Pozadina primjera</span>U 1. sedmici su VM pravljene ručno preko <code>virsh</code>. Sada Terraform preko providera <code>dmacvicar/libvirt</code> razgovara s libvirt servisom (slika 2) i pravi četiri resursa: <em>bazni volumen</em> (preuzeta Ubuntu cloud slika), <em>disk VM-a</em> (qcow2 potomak bazne slike), <em>cloud-init ISO</em> i <em>domenu</em> (samu VM). Isječak 6 postaje šablon <code>cloud-init.tftpl</code> jer se hostname i ključ ubacuju Terraformovom interpolacijom <code>${...}</code>.</div>
+<div class="code long"><div class="hd"><span>hcl</span><span>Isječak 8 · s2/p3/main.tf (skraćeno)</span></div><pre>provider "libvirt" { uri = "qemu:///system" }
+
+# bazna slika se preuzima jednom; disk VM-a je njen "copy-on-write" potomak
+resource "libvirt_volume" "base" {
+  name   = "ubuntu-noble-base.qcow2"
+  pool   = "default"
+  format = "qcow2"
+  source = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+}
+
+resource "libvirt_volume" "disk" {
+  name           = "${var.vm_name}.qcow2"
+  pool           = "default"
+  base_volume_id = libvirt_volume.base.id
+  size           = 10 * 1024 * 1024 * 1024
+}
+
+resource "libvirt_cloudinit_disk" "init" {
+  name      = "${var.vm_name}-init.iso"
+  pool      = "default"
+  user_data = templatefile("${path.module}/cloud-init.tftpl", {
+    hostname = var.vm_name
+    ssh_key  = trimspace(file(pathexpand("~/.ssh/id_ed25519.pub")))
+  })
+}
+
+resource "libvirt_domain" "vm" {
+  name      = var.vm_name
+  memory    = 1024
+  vcpu      = 1
+  cloudinit = libvirt_cloudinit_disk.init.id
+  disk { volume_id = libvirt_volume.disk.id }
+  network_interface {
+    network_name   = "default"
+    wait_for_lease = true
+  }
+}
+
+output "ip" { value = libvirt_domain.vm.network_interface[0].addresses[0] }</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 9 · pokretanje</span></div><pre>make s2-p3          # init, validate, PLAN (ništa se ne kreira)
+make s2-p3-apply    # opcionalno: stvarno kreira VM (traži KVM)
+make s2-p3-clean    # uklanja VM i state</pre></div>
+<div class="out"><div class="hd">izlaz plana (skraćeno)</div><pre>  # libvirt_volume.base will be created
+  # libvirt_volume.disk will be created
+  # libvirt_cloudinit_disk.init will be created
+  # libvirt_domain.vm will be created
+
+Plan: 4 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + ip = (known after apply)</pre></div>
+<p>Plan se čita kao pregled: četiri resursa se kreiraju, nijedan se ne mijenja ni briše. Vrijednost <code>ip</code> je <code>(known after apply)</code> jer adresa ne postoji dok VM ne dobije zakup od DHCP-a: plan ne može znati ono što još ne postoji. U ovom primjeru je i vidljiva prednost qcow2 potomka: druga VM je promjena jedne varijable (<code>vm_name</code>), a zauzima samo prostor svojih razlika.</p>
+<div class="note warn"><span class="lbl">Česte prepreke</span>
+<ul style="margin:2px 0 0 0">
+<li><code>Permission denied</code> pri otvaranju diska: AppArmor nad <code>/var/lib/libvirt/images</code>. Za lab: <code>security_driver = "none"</code> u <code>/etc/libvirt/qemu.conf</code> i <code>sudo systemctl restart libvirtd</code>.</li>
+<li>Nema <code>/dev/kvm</code>: ostati na <code>plan</code>; za stvarno pokretanje bi u domeni trebalo <code>type = "qemu"</code> (emulacija, sporo).</li>
+<li>Provider je zakucan na seriju 0.8.x jer novija serija ima drugačiju sintaksu resursa.</li>
+</ul></div>
+</section>
+
+<section>
+<div class="kicker">9 · Packer · Primjer 4 · s2/p4</div>
+<h2>Slika kao artefakt</h2>
+<div class="note bg"><span class="lbl">Pozadina</span><strong>Packer</strong> (HashiCorp) pravi slike mašina iz koda. Radi tako što pokrene privremenu VM iz osnovne slike (builder, ovdje <code>qemu</code> plugin), izvrši provisionere (shell skripta ili Ansible), ugasi mašinu i sačuva disk kao <em>artefakt</em>. Za iste slike se koriste termini "golden image" ili "pečena" slika (<em>baked image</em>).</div>
+<p>U primjeru 3 mašina pri svakom pokretanju preuzima i instalira nginx. To je sporo i zavisi od mreže. Packer taj posao premješta u fazu <em>izgradnje slike</em>: jednom se instaliraju paketi, a Terraform ubuduće pokreće mašine iz gotove slike. To je nepromjenjiva infrastruktura u praksi.</p>
+<figure>
+<svg viewBox="0 0 720 150" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif" font-size="12">
+<rect x="8" y="30" width="130" height="70" rx="8" fill="#e3f3f0" stroke="#0f766e"/><text x="73" y="58" text-anchor="middle" font-weight="700">Packer</text><text x="73" y="76" text-anchor="middle" fill="#55677a">cloud slika + paketi</text>
+<rect x="188" y="30" width="130" height="70" rx="8" fill="#eef2f6" stroke="#55677a"/><text x="253" y="58" text-anchor="middle" font-weight="700">ruo-base.qcow2</text><text x="253" y="76" text-anchor="middle" fill="#55677a">artefakt (slika)</text>
+<rect x="368" y="30" width="130" height="70" rx="8" fill="#e3f3f0" stroke="#0f766e"/><text x="433" y="58" text-anchor="middle" font-weight="700">Terraform</text><text x="433" y="76" text-anchor="middle" fill="#55677a">kreira VM iz slike</text>
+<rect x="548" y="30" width="160" height="70" rx="8" fill="#eef2f6" stroke="#55677a"/><text x="628" y="58" text-anchor="middle" font-weight="700">VM + cloud-init</text><text x="628" y="76" text-anchor="middle" fill="#55677a">hostname, ključ, okruženje</text>
+<g stroke="#12212b" fill="none" marker-end="url(#c)"><path d="M138 65H188"/><path d="M318 65H368"/><path d="M498 65H548"/></g>
+<text x="360" y="130" text-anchor="middle" fill="#55677a">rijetko se mijenja ← u slici | pri svakom pokretanju → u cloud-initu</text>
+<defs><marker id="c" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="#12212b"/></marker></defs>
+</svg>
+<figcaption>Slika 3. Podjela posla: Packer pravi sliku (sporo, jednom), Terraform pravi mašine iz nje (brzo, puno puta), a cloud-init ih personalizuje.</figcaption>
+</figure>
+<div class="code long"><div class="hd"><span>hcl</span><span>Isječak 10 · s2/p4/ubuntu.pkr.hcl (skraćeno)</span></div><pre>source "qemu" "ubuntu" {
+  iso_url          = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+  iso_checksum     = "file:https://cloud-images.ubuntu.com/noble/current/SHA256SUMS"
+  disk_image       = true          # ulaz je gotov disk, ne instalacijski ISO
+  format           = "qcow2"
+  accelerator      = "kvm"         # bez KVM-a: "tcg" (sporo)
+  cd_files         = ["./seed/user-data", "./seed/meta-data"]   # privremeni cidata ISO
+  cd_label         = "cidata"
+  ssh_username     = "ubuntu"
+  ssh_password     = "packer"
+  output_directory = "output"
+  vm_name          = "ruo-base.qcow2"
+}
+
+build {
+  sources = ["source.qemu.ubuntu"]
+  provisioner "shell" {
+    inline = [
+      "sudo cloud-init status --wait",
+      "sudo apt-get update",
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx qemu-guest-agent",
+      "sudo systemctl enable nginx",
+      "sudo passwd -l ubuntu",                  # zaključava lozinku korištenu samo pri izgradnji
+      "sudo cloud-init clean --logs --seed",    # cloud-init se ponovo izvršava pri prvom pokretanju
+    ]
+  }
+}</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 11 · pokretanje</span></div><pre>make s2-p4          # packer init i validate (bez pokretanja VM-a)
+make s2-p4-build    # opcionalno: gradi sliku (~4 min, ~640 MB, traži KVM)
+make s2-p4-vm       # plan VM-a iz izgrađene slike (bazni volumen je sada lokalna datoteka)
+make s2-p4-clean</pre></div>
+<p>Posljednja dva reda provisionera su presudna. <code>passwd -l</code> zaključava lozinku korištenu samo pri izgradnji, a <code>cloud-init clean</code> briše tragove prvog pokretanja, pa se cloud-init <em>ponovo izvršava</em> pri pokretanju mašine iz slike i primjenjuje nove korisnike i ključeve. Bez toga bi mašine iz slike bile nepristupačne. U <code>s2/p4/vm/main.tf</code> bazni volumen više ne dolazi s interneta nego iz <code>../output/ruo-base.qcow2</code>, a nginx se ne instalira pri pokretanju. Kad se zahtjev promijeni (nova verzija nginx-a), mijenja se jedna linija u Packeru, pravi se nova slika, a Terraform zamijeni mašine: mašine se ne "krpe".</p>
+</section>
+
+<section>
+<div class="kicker">10 · Pregled</div>
+<h2>Ko šta radi i redoslijed vježbi</h2>
+<table class="t">
+<tr><th>Alat</th><th>Faza</th><th>Odgovara na pitanje</th><th>Primjer</th></tr>
+<tr><td>Packer</td><td>izgradnja slike</td><td>Šta je u slici (OS, paketi)?</td><td>s2/p4</td></tr>
+<tr><td>Terraform</td><td>kreiranje resursa</td><td>Koje mašine, diskovi i mreže postoje?</td><td>s2/p1, p3</td></tr>
+<tr><td>cloud-init</td><td>prvo pokretanje</td><td>Ko je ova mašina (hostname, korisnici, ključevi)?</td><td>s2/p2, p3</td></tr>
+<tr><td>Ansible</td><td>konfiguracija u radu</td><td>Kako je mašina podešena i kako se to održava?</td><td>sedmica 3</td></tr>
+</table>
+
+<h3>Sekvencijalno pokretanje i idempotentnost</h3>
+<p>Primjeri se pokreću <code>make</code> naredbom, redom. Svaki cilj je <strong>idempotentan</strong>: može se pokrenuti ponovo i završava u istom stanju, pa se bez straha mogu ponavljati tokom nastave.</p>
+<table class="t">
+<tr><th>#</th><th>Naredba</th><th>Šta pokazuje</th><th>Pri ponovnom pokretanju</th></tr>
+<tr><td>1</td><td><code>make s2-p1</code></td><td>state, idempotentnost, drift</td><td>isti tok; datoteka se vraća na stanje iz koda</td></tr>
+<tr><td>2</td><td><code>make s2-p2</code></td><td>validacija cloud-init user-data</td><td>samo provjera, bez izmjena</td></tr>
+<tr><td>3</td><td><code>make s2-p3</code></td><td>plan VM-a iz Terraforma</td><td>novi plan, ništa se ne kreira</td></tr>
+<tr><td>4</td><td><code>make s2-p4</code></td><td>validacija Packer koda</td><td>samo provjera</td></tr>
+<tr><td>·</td><td><code>make all</code></td><td>sve gore (i sedmica 3) redom</td><td>isti rezultat</td></tr>
+<tr><td>·</td><td><code>make s2-p3-apply</code>, <code>s2-p4-build</code></td><td>opcionalno stvarno kreiranje (KVM)</td><td>drugi <code>apply</code>: <code>0 added, 0 changed</code></td></tr>
+</table>
+
+<h3>Rad u Git repozitoriju</h3>
+<ul>
+<li>U repozitorij idu <code>*.tf</code>, <code>*.pkr.hcl</code>, <code>cloud-init.tftpl</code> i <code>.terraform.lock.hcl</code>. Ne idu <code>.terraform/</code>, <code>*.tfstate</code>, slike (<code>*.qcow2</code>) i tajne.</li>
+<li>Svaka izmjena infrastrukture je commit, a prije spajanja se pregleda izlaz <code>plan</code>.</li>
+<li>Struktura iz repozitorija je i oblik projektnog zadatka (25 bodova): kod, dokumentacija arhitekture i mogućnost da ga drugi student pokrene jednom naredbom.</li>
+</ul>
+
+<h3>Pitanja za provjeru</h3>
+<table class="t">
+<tr><th>Pitanje</th><th>Odgovor</th></tr>
+<tr><td>Zašto se <code>terraform.tfstate</code> ne stavlja u Git?</td><td>Sadrži tajne u čistom tekstu, a pri radu u timu uzrokuje sukobe. Čuva se u zaključanom udaljenom backendu.</td></tr>
+<tr><td>Čemu služi KVM, a čemu QEMU?</td><td>KVM daje gostu izvršavanje na CPU-u (jezgro Linuxa). QEMU pravi uređaje gosta. libvirt njima upravlja.</td></tr>
+<tr><td>Šta pokazuje <code>plan</code> kad je neko ručno promijenio resurs?</td><td>Drift: razliku između statea nakon osvježavanja i koda. <code>apply</code> stvarno stanje vraća na ono iz koda.</td></tr>
+<tr><td>Zašto je <code>cloud-init clean</code> u Packer skripti?</td><td>Da se cloud-init izvrši ponovo pri prvom pokretanju svake mašine iz slike.</td></tr>
+<tr><td>Kada slika, a kada cloud-init?</td><td>Slika: ono što je isto za sve mašine. cloud-init: ono što je specifično za instancu.</td></tr>
+</table>
+
+<h3>Zadaci za samostalni rad</h3>
+<ol>
+<li>U <code>s2/p1</code> dodati drugu datoteku pomoću <code>for_each</code> nad listom imena i pratiti kako <code>plan</code> reaguje kad se element ukloni iz liste.</li>
+<li>U <code>s2/p3</code> napraviti dvije mašine (<code>web1</code>, <code>web2</code>) pomoću <code>for_each</code> i dodati izlaz s obje adrese. Predati izlaz <code>terraform plan</code> (očekuje se <code>Plan: 7 to add</code>) bez izvršavanja <code>apply</code>.</li>
+<li>Proširiti Packer sliku jednim paketom, promijeniti verziju u <code>/etc/ruo-image-version</code> i opisati šta bi se desilo s mašinama.</li>
+</ol>
+<div class="note"><span class="lbl">Sljedeća sedmica</span>Mašine su sada kreirane iz koda, ali se još ručno "dorađuju". Sedmica 3 uvodi Ansible (konfiguracija u radu), povezivanje s Terraformom i kontejnere kao kod (Dockerfile, Compose, Kubernetes manifesti).</div>
+</section>
+
+<footer>Računarstvo u oblaku · II ciklus, III semestar · akademska 2026/27 · Sedmica 2: Uvod u IaC: virtualne mašine kao kod</footer>
+</body></html>

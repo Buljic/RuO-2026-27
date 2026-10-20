@@ -1,0 +1,43 @@
+@page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+:root {
+  --ink: #12212b; --muted: #55677a; --line: #dfe5ea; --teal: #0f766e; --teal-bg: #e3f3f0;
+  --code-bg: #0f1c24; --code-ink: #d7e3ea; --code-head: #8aa0ad; --cm: #6b8594;
+}
+* { box-sizing: border-box; }
+html { font-family: "Segoe UI", "Inter", system-ui, sans-serif; color: var(--ink); font-size: 10pt; line-height: 1.55; }
+body { margin: 0; }
+.mono, code, pre, .kicker, .lbl { font-family: "Consolas", "Cascadia Mono", monospace; }
+header.top { display: flex; gap: 14px; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+header.top img { height: 52px; width: auto; }
+.uni b { display: block; font-size: 12pt; } .uni span { color: var(--muted); font-size: 9.5pt; }
+.kicker { color: var(--teal); letter-spacing: .12em; font-size: 8pt; text-transform: uppercase; margin: 18px 0 4px; }
+h1 { font-size: 26pt; line-height: 1.1; margin: 0 0 8px; letter-spacing: -.02em; }
+.lead { font-size: 12pt; color: var(--muted); margin: 0 0 16px; }
+h2 { font-size: 17pt; margin: 4px 0 8px; letter-spacing: -.01em; break-after: avoid; }
+h3 { font-size: 11.5pt; margin: 16px 0 4px; break-after: avoid; }
+section { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 6px; }
+section > .kicker { margin-top: 12px; }
+p { margin: 0 0 8px; } ul, ol { margin: 4px 0 10px; padding-left: 20px; } li { margin: 2px 0; }
+code { background: var(--teal-bg); color: #0b4f4a; padding: 0 3px; border-radius: 3px; font-size: 9pt; }
+table.meta { width: 100%; border: 1px solid var(--line); border-radius: 6px; border-collapse: separate; border-spacing: 0; margin: 10px 0 6px; }
+table.meta td { padding: 7px 12px; border-bottom: 1px solid var(--line); } table.meta tr:last-child td { border-bottom: 0; }
+table.meta td:first-child { width: 22%; font-family: Consolas, monospace; font-size: 8pt; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; }
+table.t { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 9pt; break-inside: avoid; }
+table.t th { text-align: left; font-family: Consolas, monospace; font-size: 7.5pt; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border-bottom: 1.5px solid var(--ink); padding: 5px 8px; }
+table.t td { border-bottom: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
+.code { background: var(--code-bg); border-radius: 8px; margin: 10px 0 12px; break-inside: avoid-page; overflow: hidden; }
+.code.long { break-inside: auto; }
+.code .hd { display: flex; justify-content: space-between; padding: 6px 14px; border-bottom: 1px solid #25394a; color: var(--code-head); font-family: Consolas, monospace; font-size: 8pt; }
+.code pre { margin: 0; padding: 10px 14px; color: var(--code-ink); font-size: 8.4pt; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.code pre .c { color: var(--cm); }
+.out { background: var(--code-bg); border-left: 3px solid var(--teal); border-radius: 8px; margin: -4px 0 12px; break-inside: avoid; }
+.out .hd { padding: 5px 14px; color: var(--code-head); font-family: Consolas, monospace; font-size: 8pt; border-bottom: 1px solid #25394a; }
+.out pre { margin: 0; padding: 8px 14px; color: var(--code-ink); font-size: 8.4pt; line-height: 1.45; white-space: pre-wrap; }
+.note { border-left: 3px solid var(--teal); background: var(--teal-bg); padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; break-inside: avoid; }
+.note .lbl { display: block; color: var(--teal); font-size: 7.5pt; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 2px; font-weight: 700; }
+.warn { border-left-color: #b45309; background: #fdf1e0; } .warn .lbl { color: #b45309; }
+.bg { border-left-color: #475569; background: #eef2f6; } .bg .lbl { color: #475569; }
+figure { margin: 12px 0; break-inside: avoid; } figure svg { width: 100%; height: auto; }
+figcaption { color: var(--muted); font-size: 8.5pt; margin-top: 4px; }
+footer { margin-top: 26px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8pt; }
+.pb { break-before: page; }

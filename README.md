@@ -11,7 +11,7 @@ prava datoteka, a pokreće se jednom naredbom `make`, pa se na nastavi odmah vid
 | 2 | Uvod u IaC: virtualne mašine kao kod | `s2/p1` Terraform (state, drift), `s2/p2` cloud-init, `s2/p3` Terraform + libvirt VM, `s2/p4` Packer |
 | 3 | Konfiguracija i kontejneri kao kod | `s3/p1` Ansible, `s3/p2` role + Vault, `s3/p3` Terraform + Ansible, `s3/p4` Dockerfile + Compose, `s3/p5` Kubernetes |
 
-Bilješke (PDF) uz primjere su u mapi [`docs/`](docs/).
+Bilješke (PDF) uz primjere su u mapi [`docs/`](docs/). Svaki primjer ima i objašnjenje pozadine (KVM/QEMU/libvirt, cloud-init, Ansible, Docker, Kubernetes) u bilješkama.
 
 ## Šta je potrebno
 
@@ -118,22 +118,37 @@ Izuzeci koji se mogu bezbrijetno izvršiti jer rade lokalno i ne koštaju ništa
 | `make s3-p4-persist` / `s3-p4-clean` | podaci u volumenu / čišćenje | lokalni kontejneri |
 | `make s3-p5` | Kubernetes manifest, dry-run | ne |
 | `make s3-p5-up` / `s3-p5-heal` / `s3-p5-clean` | kind klaster, samoizlječenje, brisanje | lokalni kontejneri |
+| `make all` | svi primjeri redom (sekvencijalno, idempotentno) | lokalna datoteka i kontejneri |
 | `make safe-all` | sve što ne mijenja sistem | ne |
 | `make clean-all` | čisti sve primjere | uklanja |
 
-### Preporučeni tok na nastavi
+### Redoslijed: make po primjerima, sekvencijalno
+
+Dovoljno je da student pokrene ciljeve redom. Svaki cilj je **idempotentan**: može se pokrenuti ponovo i završava u istom
+stanju (Terraform `plan`/`apply` bez promjena, `ansible --check`, `compose up -d` koji ne obnavlja ništa, Vault koji se
+pravi samo ako ne postoji). Ako alat nedostaje, cilj odmah javlja šta pokrenuti (`./00-setup.sh`).
 
 ```bash
-make check                 # priprema
-make s2-p1                 # state, idempotentnost, drift na jednom fajlu
-make s2-p2 && make s2-p3   # cloud-init i plan za VM
-make s3-p1                 # Ansible --check
-make s3-p2                 # role i Vault
-make s3-p4                 # Docker Compose
-make s3-p5                 # Kubernetes dry-run
+./00-setup.sh   # jednom
+make check      # priprema
+make s2-p1      # 1. state, idempotentnost, drift na jednoj datoteci
+make s2-p2      # 2. cloud-init user-data
+make s2-p3      # 3. Terraform + libvirt VM (plan)
+make s2-p4      # 4. Packer (validate)
+make s3-p1      # 5. Ansible (--check)
+make s3-p2      # 6. role + Vault
+make s3-p3      # 7. Terraform + Ansible (plan)
+make s3-p4      # 8. Dockerfile + Compose
+make s3-p5      # 9. Kubernetes (dry-run)
+make all        # sve gore odjednom, redom
 ```
 
 Spore korake (preuzimanje Ubuntu slike, `packer build`, `kind create cluster`) pokrenuti prije predavanja.
+
+## Dokumentacija
+
+Bilješke s predavanja su u [`docs/`](docs/) (PDF). Izvor (HTML) je u `docs/src/`, a PDF se generiše naredbom
+`python docs/src/build.py` (potreban Edge, Chrome ili Chromium).
 
 ## Tajne i Git
 

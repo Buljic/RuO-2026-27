@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="bs"><head><meta charset="utf-8">
+<title>RuO – Bilješke s predavanja – Sedmica 3</title>
+<link rel="stylesheet" href="style.css"></head><body>
+
+<header class="top"><img src="logo.png" alt="Univerzitet u Zenici, Politehnički fakultet"><div class="uni"><b>Univerzitet u Zenici</b><span>Politehnički fakultet</span></div></header>
+
+<div class="kicker">Bilješke s predavanja · Sedmica 3</div>
+<h1>Upravljanje konfiguracijom i kontejneri kao kod</h1>
+<p class="lead">Ansible (inventory, playbook, role, šabloni, Vault), povezivanje Terraforma i Ansible-a te kontejneri kao kod: <code>Dockerfile</code>, <code>Docker Compose</code> i uvod u Kubernetes manifeste.</p>
+
+<table class="meta">
+<tr><td>Predmet</td><td>Računarstvo u oblaku</td></tr>
+<tr><td>Studij</td><td>II ciklus studija, III semestar, akademska godina 2026/27</td></tr>
+<tr><td>Nastavnik</td><td>V. prof. dr. Đulaga Hadžić</td></tr>
+<tr><td>Asistent</td><td>ass. Mr. Adin Jahić</td></tr>
+<tr><td>Termin</td><td>petak, 30.10.2026, 17:15–20:15, Kabinet 3204</td></tr>
+<tr><td>Tema</td><td>Upravljanje konfiguracijom i kontejneri kao kod</td></tr>
+<tr><td>Kod</td><td>github.com/Dadyze/RuO-2026-27 (mape <code>s3/p1</code> do <code>s3/p5</code>)</td></tr>
+</table>
+
+<section>
+<div class="kicker">Okvir nastavne jedinice</div>
+<h2>Ciljevi i način rada</h2>
+<p>U drugoj sedmici su mašine napravljene iz koda: Terraform ih je kreirao, cloud-init personalizovao, a Packer pripremio sliku. Ostalo je pitanje šta se događa <em>unutar</em> mašine nakon toga: paketi, konfiguracijske datoteke, servisi, tajne. Taj dio rješava <strong>upravljanje konfiguracijom</strong>, predstavljeno kroz Ansible. Druga polovina sedmice prenosi isti način razmišljanja na kontejnere: aplikacija i okruženje se opisuju datotekama (<code>Dockerfile</code>, <code>compose.yaml</code>, Kubernetes manifesti), a ne naredbama upisanim ručno.</p>
+<p>Nakon nastavne jedinice student je u stanju:</p>
+<ul>
+<li>objasniti razliku između provisioninga (Terraform) i upravljanja konfiguracijom (Ansible) i povezati ih u jedan tok,</li>
+<li>napisati inventory, playbook i šablon (Jinja2) te provjeriti idempotentnost izvršavanja,</li>
+<li>organizovati kod u rolu i zaštititi osjetljive vrijednosti Ansible Vaultom,</li>
+<li>generisati Ansible inventory iz Terraform izlaza,</li>
+<li>napisati Dockerfile i Compose datoteku za aplikaciju s bazom i povezati slojeve slike s prvom sedmicom,</li>
+<li>pročitati osnovni Kubernetes manifest i objasniti razliku između Terraform i Kubernetes pristupa usklađivanju stanja.</li>
+</ul>
+
+<h3>Okruženje i pokretanje</h3>
+<p>Alati za ovu sedmicu (Ansible, Docker, kubectl, kind) instalira skripta <code>00-setup.sh</code> (opisana u bilješkama za sedmicu 2). Ako je već pokrenuta, dovoljno je ažurirati repozitorij i pokretati primjere redom:</p>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 0 · početak</span></div><pre>cd ~/RuO-2026-27 &amp;&amp; git pull
+make check                       # da li su Ansible, Docker, kubectl, kind prisutni
+make s3-p1                       # zatim s3-p2, s3-p3, s3-p4, s3-p5 (ili: make all)</pre></div>
+<div class="note"><span class="lbl">Rad bez troškova: pregled umjesto izvršavanja</span>Svaki alat ima način da pokaže šta bi uradio bez izmjene sistema: <code>terraform plan</code>, <code>ansible-playbook --check --diff</code>, <code>docker compose config</code> i <code>kubectl apply --dry-run</code>. Osnovni cilj svakog primjera koristi baš to, a stvarno izvršavanje je opcionalno (<code>-apply</code>, <code>-up</code>). Svi ciljevi su idempotentni: mogu se ponavljati. Napomena: <code>--check</code> ne zna šta bi se desilo nakon zadatka koji još nije izvršen, pa dio zadataka može prijaviti grešku koju prava izvedba ne bi imala.</div>
+<div class="note warn"><span class="lbl">Važno</span>Repozitorij mora biti u Linux fajl sistemu (<code>~/</code>), ne u <code>/mnt/c/...</code>: Ansible ignoriše <code>ansible.cfg</code> u direktoriju u koji svi mogu pisati, pa Vault i uloge ne bi radili.</div>
+</section>
+
+<section>
+<div class="kicker">1 · Pojam i pozadina</div>
+<h2>Od provisioninga do upravljanja konfiguracijom</h2>
+<p>Terraform odgovara na pitanje <em>koji resursi postoje</em> (mašine, mreže, diskovi), ali se ne bavi onim što je unutar mašine. cloud-init to rješava samo pri prvom pokretanju, a promjene u radu (nova konfiguracija, novi korisnik, zakrpa) ostaju bez vlasnika. Za taj dio služi <strong>alat za upravljanje konfiguracijom</strong>.</p>
+<div class="note bg"><span class="lbl">Pozadina: Ansible</span>Ansible je nastao 2012. (Michael DeHaan), a od 2015. ga razvija Red Hat. Za razliku od starijih alata (Puppet, Chef) <strong>nema agenta</strong>: ne instalira se ništa na upravljane mašine. Kontrolni čvor se spaja preko <em>SSH-a</em>, kopira male Python <em>module</em>, izvršava ih i briše. Zato mašini trebaju samo SSH i Python, a ono što cloud-init pripremi (korisnik i SSH ključ) je upravo ono što Ansible traži. Pisan je u YAML-u, što ga čini čitljivim.</div>
+<ul>
+<li><strong>Bez agenta.</strong> SSH + Python, bez posebnog softvera na mašinama.</li>
+<li><strong>Push model.</strong> Kontrolni čvor šalje konfiguraciju kad se izda naredba.</li>
+<li><strong>Deklarativni moduli.</strong> Zadatak ne kaže "izvrši <code>apt install nginx</code>", nego "paket <code>nginx</code> treba biti prisutan". Modul provjeri stanje i mijenja samo ako treba: idempotentnost iz druge sedmice.</li>
+</ul>
+<figure>
+<svg viewBox="0 0 720 190" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif" font-size="12">
+<rect x="8" y="20" width="200" height="150" rx="8" fill="#e3f3f0" stroke="#0f766e"/>
+<text x="108" y="42" text-anchor="middle" font-weight="700">Kontrolni čvor</text>
+<rect x="24" y="54" width="168" height="26" rx="5" fill="#fff" stroke="#0f766e"/><text x="108" y="72" text-anchor="middle">inventory (ko)</text>
+<rect x="24" y="86" width="168" height="26" rx="5" fill="#fff" stroke="#0f766e"/><text x="108" y="104" text-anchor="middle">playbook + role (šta)</text>
+<rect x="24" y="118" width="168" height="26" rx="5" fill="#fff" stroke="#0f766e"/><text x="108" y="136" text-anchor="middle">Vault (tajne)</text>
+<g fill="#eef2f6" stroke="#55677a"><rect x="470" y="14" width="240" height="46" rx="8"/><rect x="470" y="72" width="240" height="46" rx="8"/><rect x="470" y="130" width="240" height="46" rx="8"/></g>
+<text x="590" y="42" text-anchor="middle" font-weight="700">web1</text><text x="590" y="100" text-anchor="middle" font-weight="700">web2</text><text x="590" y="158" text-anchor="middle" font-weight="700">db1</text>
+<g stroke="#12212b" fill="none" marker-end="url(#a)"><path d="M208 70C300 70 380 40 470 38"/><path d="M208 95H470"/><path d="M208 120C300 120 380 150 470 152"/></g>
+<text x="340" y="86" text-anchor="middle" fill="#55677a">SSH + Python moduli</text>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="#12212b"/></marker></defs>
+</svg>
+<figcaption>Slika 1. Ansible nema agenta: kontrolni čvor se preko SSH-a spaja na svaku mašinu iz inventorya i izvršava zadatke iz playbooka.</figcaption>
+</figure>
+<table class="t">
+<tr><th>Pojam</th><th>Značenje</th></tr>
+<tr><td>Inventory</td><td>Spisak mašina podijeljenih u grupe (<code>[web]</code>, <code>[db]</code>) uz pripadajuće varijable.</td></tr>
+<tr><td>Modul</td><td>Jedinica posla (<code>apt</code>, <code>service</code>, <code>template</code>, <code>user</code>, <code>file</code>...). Većina je idempotentna.</td></tr>
+<tr><td>Task</td><td>Jedan poziv modula s parametrima.</td></tr>
+<tr><td>Play / playbook</td><td>Play veže grupu mašina (<code>hosts</code>) s listom zadataka. Playbook je YAML datoteka s jednim ili više playeva.</td></tr>
+<tr><td>Handler</td><td>Zadatak koji se izvršava samo ako ga je neki zadatak "obavijestio" (<code>notify</code>) da je nešto promijenio, npr. reload servisa nakon izmjene konfiguracije.</td></tr>
+<tr><td>Role</td><td>Pakovanje zadataka, šablona, varijabli i handlera u višekratno upotrebljivu cjelinu.</td></tr>
+<tr><td>Fact</td><td>Podatak koji Ansible prikupi o mašini (OS, adrese, memorija). Koristi se u uslovima i šablonima.</td></tr>
+<tr><td>Vault</td><td>Šifrovanje osjetljivih datoteka i vrijednosti u repozitoriju.</td></tr>
+</table>
+<div class="note warn"><span class="lbl">Granica idempotentnosti</span>Moduli <code>command</code> i <code>shell</code> ne znaju ništa o stanju, pa su uvijek <code>changed</code>. Koriste se tek kad ne postoji odgovarajući modul, uz <code>creates:</code> ili <code>changed_when:</code> koji im vraćaju provjeru stanja.</div>
+</section>
+
+<section>
+<div class="kicker">2 · Primjer 1 · s3/p1</div>
+<h2>Inventory, playbook i šablon</h2>
+<div class="note bg"><span class="lbl">Pozadina primjera</span>Postavlja se nginx s vlastitom početnom stranicom. Cilj je lokalna mašina (<code>ansible_connection=local</code>), pa Ansible ne koristi SSH nego izvršava module direktno. Isti playbook radi na laptopu i na VM-u iz druge sedmice; mijenja se samo inventory. Početna stranica je <em>šablon</em> (Jinja2): <code>{{ varijabla }}</code> se zamjenjuje vrijednošću, a <em>facts</em> daju podatke o mašini.</div>
+<div class="code long"><div class="hd"><span>yaml</span><span>Isječak 1 · s3/p1/site.yml</span></div><pre>- name: Web server
+  hosts: web
+  become: true
+  vars:
+    naslov: "Računarstvo u oblaku, sedmica 3"
+  tasks:
+    - name: nginx je instaliran
+      ansible.builtin.apt: { name: nginx, state: present, update_cache: true, cache_valid_time: 3600 }
+
+    - name: početna stranica iz šablona
+      ansible.builtin.template:
+        src: index.html.j2
+        dest: /var/www/html/index.html
+        mode: "0644"
+      notify: reload nginx
+
+    - name: nginx radi i uključen je pri pokretanju
+      ansible.builtin.service: { name: nginx, state: started, enabled: true }
+
+  handlers:
+    - name: reload nginx
+      ansible.builtin.service: { name: nginx, state: reloaded }</pre></div>
+<div class="code"><div class="hd"><span>jinja2</span><span>Isječak 2 · s3/p1/templates/index.html.j2</span></div><pre>&lt;h1&gt;{{ naslov }}&lt;/h1&gt;
+&lt;p&gt;Host: {{ ansible_facts['hostname'] }},
+   OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}&lt;/p&gt;</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 3 · pokretanje</span></div><pre>make s3-p1          # ping, syntax-check i --check --diff (bez izmjena; traži sudo lozinku zbog become)
+make s3-p1-apply    # opcionalno: stvarno instalira, dva puta (idempotentnost)</pre></div>
+<div class="out"><div class="hd">izlaz make s3-p1-apply (skraćeno, brojevi se mogu razlikovati)</div><pre>localhost : ok=5  changed=3  unreachable=0  failed=0     # 1. izvršavanje
+...
+localhost : ok=4  changed=0  unreachable=0  failed=0     # 2. izvršavanje</pre></div>
+<p>Najvažniji red je <code>changed=0</code> u drugom izvršavanju. Isto se može provjeriti i <em>drift</em> konfiguracije: ručno izmijeniti <code>/var/www/html/index.html</code> i ponovo pokrenuti. Zadatak <code>template</code> će prijaviti <code>changed</code>, vratiti sadržaj i pozvati handler. Handler se izvršava <em>samo</em> kad je prethodni zadatak nešto promijenio, zato se reload ne radi pri svakom pokretanju. Pri provjeri <code>--check --diff</code> prikazuje se razlika (<em>diff</em>) datoteke koja bi se promijenila.</p>
+<h3>Inventory, grupe i varijable</h3>
+<p>Inventory se može pisati u INI ili YAML obliku. Varijable se ne drže u njemu nego u <code>group_vars/&lt;grupa&gt;/</code> i <code>host_vars/&lt;host&gt;/</code>, pa se podaci i spisak mašina održavaju odvojeno. Pregled grupa: <code>ansible-inventory -i inventory.yml --graph</code>.</p>
+<div class="code"><div class="hd"><span>yaml</span><span>Isječak 4 · inventory.yml (ilustracija)</span></div><pre>all:
+  children:
+    web:
+      hosts:
+        web1: { ansible_host: 192.168.122.57, ansible_user: student }
+        web2: { ansible_host: 192.168.122.58, ansible_user: student }
+    db:
+      hosts:
+        db1:  { ansible_host: 192.168.122.60, ansible_user: student }</pre></div>
+<table class="t">
+<tr><th>Potreba</th><th>Primjer</th></tr>
+<tr><td>Paket</td><td><code>ansible.builtin.apt: { name: [nginx, curl], state: present }</code></td></tr>
+<tr><td>Servis</td><td><code>ansible.builtin.service: { name: nginx, state: restarted }</code></td></tr>
+<tr><td>Datoteka iz šablona / kopija</td><td><code>template</code> (Jinja2), <code>copy</code> (statična)</td></tr>
+<tr><td>Korisnik, direktorij</td><td><code>user</code>, <code>file</code> (<code>state: directory</code>, <code>mode</code>, <code>owner</code>)</td></tr>
+<tr><td>Uslov, petlja</td><td><code>when: ansible_facts['os_family'] == 'Debian'</code>, <code>loop: [a, b]</code></td></tr>
+</table>
+</section>
+
+<section>
+<div class="kicker">3 · Primjer 2 · s3/p2</div>
+<h2>Role i Ansible Vault</h2>
+<div class="note bg"><span class="lbl">Pozadina primjera</span>Kad playbook naraste, zadaci i datoteke se pakuju u <strong>rolu</strong> s fiksnom strukturom direktorija, pa je lako ponovo upotrijebiti i dijeliti (javni skup rola je Ansible Galaxy). Primjer pravi rolu <code>webserver</code> i dodaje <em>tajnu</em> (lozinku baze) koja se šifruje Vaultom, tako da u Gitu nikad ne završi u čistom tekstu. Vault šifruje datoteku algoritmom AES256 i lozinkom koja se čuva izvan repozitorija.</div>
+<table class="t">
+<tr><th>Direktorij role</th><th>Sadržaj</th></tr>
+<tr><td><code>tasks/main.yml</code></td><td>Zadaci role.</td></tr>
+<tr><td><code>handlers/main.yml</code></td><td>Handleri.</td></tr>
+<tr><td><code>templates/</code>, <code>files/</code></td><td>Šabloni (Jinja2) i statične datoteke.</td></tr>
+<tr><td><code>defaults/main.yml</code></td><td>Podrazumijevane vrijednosti varijabli (najniži prioritet, lako se nadjačaju).</td></tr>
+</table>
+<div class="code"><div class="hd"><span>yaml</span><span>Isječak 5 · s3/p2/roles/webserver/tasks/main.yml</span></div><pre>- name: nginx je instaliran
+  ansible.builtin.apt: { name: nginx, state: present, cache_valid_time: 3600 }
+
+- name: početna stranica
+  ansible.builtin.template: { src: index.html.j2, dest: /var/www/html/index.html, mode: "0644" }
+  notify: reload nginx
+
+- name: direktorij za konfiguraciju aplikacije
+  ansible.builtin.file: { path: /etc/ruo, state: directory, mode: "0750" }
+
+- name: tajna aplikacije (samo root može čitati)
+  ansible.builtin.template: { src: app.env.j2, dest: /etc/ruo/app.env, owner: root, mode: "0600" }
+  no_log: true                 # vrijednost se ne ispisuje u izlazu
+
+- name: nginx radi
+  ansible.builtin.service: { name: nginx, state: started, enabled: true }</pre></div>
+<p>Prema dogovoru, obična varijabla u <code>group_vars/web/vars.yml</code> samo <em>upućuje</em> na šifrovanu varijablu s prefiksom <code>vault_</code>. Tako se u kodu vidi odakle vrijednost dolazi, a pretraga ostaje moguća.</p>
+<div class="code"><div class="hd"><span>yaml</span><span>Isječak 6 · varijable i tajna</span></div><pre># group_vars/web/vars.yml (u Gitu)
+db_password: "{{ vault_db_password }}"
+
+# group_vars/web/vault.yml (šifrovano, NIJE u Gitu u ovom labu)
+vault_db_password: "LabLozinka-123"</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 7 · pokretanje</span></div><pre>make s3-p2-vault    # pravi lab Vault lozinku i šifruje tajnu (samo ako ne postoje)
+make s3-p2          # pregled šifrovane datoteke, ansible-vault view, syntax-check, --check
+make s3-p2-apply    # opcionalno: stvarno primjenjuje rolu</pre></div>
+<div class="out"><div class="hd">izlaz (skraćeno)</div><pre>== sifrovana datoteka (prvih 60 znakova)
+$ANSIBLE_VAULT;1.1;AES256
+6234343261623732303238353466323334
+== ansible-vault view
+vault_db_password: "LabLozinka-123"</pre></div>
+<p>Datoteka je šifrovana (AES256) i može se commitovati. Dešifrovanje radi samo ko ima Vault lozinku, a ona se čuva izvan repozitorija (u CI sistemu kao tajna, u upravitelju lozinki ili u datoteci s pravom <code>0600</code> koja je u <code>.gitignore</code>). Za pojedinačnu vrijednost služi <code>ansible-vault encrypt_string 'vrijednost' --name 'vault_api_key'</code>.</p>
+<div class="note"><span class="lbl">Pravilo</span>Tajna se ne smije pojaviti u <em>dnevniku</em> (<code>no_log: true</code>), u <em>Gitu</em> (Vault ili vanjski upravitelj) ni u <em>slici</em> (vidi Dockerfile u 6. poglavlju).</div>
+</section>
+
+<section>
+<div class="kicker">4 · Terraform + Ansible · Primjer 3 · s3/p3</div>
+<h2>Dva alata, jedan tok</h2>
+<div class="note bg"><span class="lbl">Pozadina primjera</span>Terraform stvara mašine i na izlazu daje njihove adrese. Ansible čita te adrese i konfiguriše mašine. Kritična tačka je prenos podataka: Ansible mora znati <em>koje</em> mašine su napravljene. Spona je <strong>inventory</strong>, a u ovom primjeru ga Terraform generiše kao običan resurs (<code>local_file</code>). cloud-init se svodi na <em>bootstrap</em> (korisnik i SSH ključ, dovoljno da se Ansible prijavi), a sve ostalo preuzima rola iz primjera 2.</div>
+<table class="t">
+<tr><th>Pristup</th><th>Kako</th><th>Ocjena</th></tr>
+<tr><td>Terraform generiše inventory</td><td><code>local_file</code> s inventoryjem iz izlaza VM-a. Ansible se pokreće zasebno.</td><td>Jednostavno i jasno. <strong>Koristi se ovdje.</strong></td></tr>
+<tr><td><code>local-exec</code> provisioner</td><td>Terraform sam poziva <code>ansible-playbook</code>.</td><td>Dokumentacija ga svrstava u "krajnju mjeru": greška u Ansible-u ruši <code>apply</code>, a plan ne pokazuje šta će Ansible raditi.</td></tr>
+<tr><td>Dinamički inventory</td><td>Ansible plugin sam upita API oblaka.</td><td>Najelegantnije u oblaku, više podešavanja.</td></tr>
+</table>
+<figure>
+<svg viewBox="0 0 720 120" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, sans-serif" font-size="12">
+<rect x="8" y="25" width="140" height="70" rx="8" fill="#e3f3f0" stroke="#0f766e"/><text x="78" y="55" text-anchor="middle" font-weight="700">Terraform</text><text x="78" y="73" text-anchor="middle" fill="#55677a">kreira VM</text>
+<rect x="196" y="25" width="140" height="70" rx="8" fill="#eef2f6" stroke="#55677a"/><text x="266" y="55" text-anchor="middle" font-weight="700">inventory.ini</text><text x="266" y="73" text-anchor="middle" fill="#55677a">generisan iz izlaza</text>
+<rect x="384" y="25" width="140" height="70" rx="8" fill="#e3f3f0" stroke="#0f766e"/><text x="454" y="55" text-anchor="middle" font-weight="700">Ansible</text><text x="454" y="73" text-anchor="middle" fill="#55677a">konfiguriše VM</text>
+<rect x="572" y="25" width="140" height="70" rx="8" fill="#eef2f6" stroke="#55677a"/><text x="642" y="55" text-anchor="middle" font-weight="700">Gotova usluga</text><text x="642" y="73" text-anchor="middle" fill="#55677a">nginx + aplikacija</text>
+<g stroke="#12212b" fill="none" marker-end="url(#b)"><path d="M148 60H196"/><path d="M336 60H384"/><path d="M524 60H572"/></g>
+<defs><marker id="b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="#12212b"/></marker></defs>
+</svg>
+<figcaption>Slika 2. Terraform i Ansible dijele posao po granici "resurs" / "unutrašnjost resursa". Spona među njima je inventory.</figcaption>
+</figure>
+<div class="code"><div class="hd"><span>hcl</span><span>Isječak 8 · dodatak u s3/p3/main.tf: inventory kao resurs</span></div><pre>resource "local_file" "inventory" {
+  filename = "${path.module}/inventory.ini"
+  content  = &lt;&lt;-EOT
+    [web]
+    ${var.vm_name} ansible_host=${libvirt_domain.vm.network_interface[0].addresses[0]} ansible_user=student
+  EOT
+}</pre></div>
+<div class="code"><div class="hd"><span>yaml</span><span>Isječak 9 · s3/p3/site.yml</span></div><pre>- hosts: web
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: čekaj da SSH postane dostupan
+      ansible.builtin.wait_for_connection: { timeout: 300 }
+    - name: čekaj da cloud-init završi
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+    - name: prikupi činjenice
+      ansible.builtin.setup:
+  roles:
+    - webserver</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 10 · pokretanje</span></div><pre>make s3-p3          # init, validate, PLAN i syntax-check (VM se ne kreira)
+make s3-p3-apply    # opcionalno: kreira VM, pa je konfiguriše (deploy.sh), traži KVM
+make s3-p3-clean</pre></div>
+<div class="out"><div class="hd">izlaz plana (skraćeno)</div><pre>  # local_file.inventory will be created
+  + resource "local_file" "inventory" {
+      + content  = (known after apply)
+      + filename = "./inventory.ini"
+    }
+  ...
+Plan: 5 to add, 0 to change, 0 to destroy.</pre></div>
+<p>Plan pokazuje zašto je ovaj pristup dobar: sadržaj <code>inventory.ini</code> je <code>(known after apply)</code> jer zavisi od IP adrese koja još ne postoji, što je i dokaz da Ansible zavisi od Terraformovog izlaza. Ansible čeka (<code>wait_for_connection</code>, <code>cloud-init status --wait</code>) jer mašina dobije adresu prije nego je cloud-init završio; bez toga bi prvo izvršavanje nasumično pucalo.</p>
+<div class="note"><span class="lbl">Ko je odgovoran za šta</span>Ako se promijeni broj mašina ili njihova veličina, mijenja se <strong>Terraform</strong>. Ako se promijeni konfiguracija unutar mašine (paket, datoteka, korisnik), mijenja se <strong>Ansible</strong> i izvršava se samo on. Ta podjela omogućava brze izmjene bez ponovnog kreiranja mašina.</div>
+</section>
+
+<section>
+<div class="kicker">5 · Kontejneri kao kod</div>
+<h2>Dockerfile i slojevi</h2>
+<div class="note bg"><span class="lbl">Pozadina</span>Iz prve sedmice: kontejner je proces s izolovanim pogledom na resurse, a <em>slika</em> je OCI paket slojeva fajl sistema. Docker je (2013) učinio taj model dostupnim jednostavnom komandom, a ispod njega rade <code>containerd</code> i <code>runc</code>. <strong>Dockerfile</strong> je recept za izgradnju slike. Svaka instrukcija pravi novi <em>sloj</em> (overlayfs iz prve sedmice), a Docker slojeve <strong>kešira</strong>: ako se instrukcija i sve prije nje nisu promijenile, koristi se postojeći sloj.</div>
+<table class="t">
+<tr><th>Instrukcija</th><th>Značenje</th></tr>
+<tr><td><code>FROM</code></td><td>Osnovna slika. Navodi se konkretna verzija (<code>python:3.12-slim</code>), ne <code>latest</code>.</td></tr>
+<tr><td><code>WORKDIR</code>, <code>COPY</code></td><td>Radni direktorij i kopiranje datoteka u sliku.</td></tr>
+<tr><td><code>RUN</code></td><td>Naredba pri izgradnji (instalacija zavisnosti). Stvara sloj.</td></tr>
+<tr><td><code>ENV</code>, <code>EXPOSE</code></td><td>Varijable okruženja i dokumentovanje porta (ne objavljuje ga).</td></tr>
+<tr><td><code>USER</code></td><td>Korisnik pod kojim radi proces (ne <code>root</code>).</td></tr>
+<tr><td><code>HEALTHCHECK</code></td><td>Kako Docker provjerava da li je proces zdrav.</td></tr>
+<tr><td><code>CMD</code> / <code>ENTRYPOINT</code></td><td>Šta se pokreće. <code>ENTRYPOINT</code> je fiksni program, a <code>CMD</code> njegovi podrazumijevani argumenti.</td></tr>
+</table>
+<p>Dobra praksa: stalno promjenjivo ide pri dnu (da keš ostane važeći), <code>.dockerignore</code> izbacuje suvišne datoteke, proces ne radi kao root, a tajne se <strong>nikad</strong> ne upisuju u sliku jer ostaju u slojevima čak i kad se kasnije obrišu. <em>Multi-stage</em> izgradnja koristi jednu sliku za izgradnju, a drugu, manju, za izvršavanje.</p>
+</section>
+
+<section>
+<div class="kicker">6 · Primjer 4 · s3/p4</div>
+<h2>Aplikacija s bazom u Docker Composeu</h2>
+<div class="note bg"><span class="lbl">Pozadina primjera</span>Jednostavna aplikacija (Flask) broji posjete i čuva brojač u Redisu (baza u memoriji). Dockerfile opisuje aplikaciju, a <strong>Docker Compose</strong> (<code>compose.yaml</code>) deklarativno opisuje cijeli sistem na jednom računaru: koje usluge postoje, kako su povezane, koje podatke čuvaju i kada su spremne. Za razliku od prethodnih primjera, ovdje se sve izvršava lokalno i besplatno, pa osnovni cilj radi stvarni <code>up</code>.</div>
+<div class="code"><div class="hd"><span>dockerfile</span><span>Isječak 11 · s3/p4/app/Dockerfile</span></div><pre># --- faza 1: instalacija zavisnosti (zasebna zbog keša slojeva) ---
+FROM python:3.12-slim AS build
+WORKDIR /w
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# --- faza 2: finalna slika ---
+FROM python:3.12-slim
+RUN useradd --system --uid 10001 app
+WORKDIR /app
+COPY --from=build /install /usr/local
+COPY app.py .
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "app:app"]</pre></div>
+<p>Zavisnosti se kopiraju i instaliraju <em>prije</em> koda aplikacije: dok se <code>requirements.txt</code> ne promijeni, svaka izmjena u <code>app.py</code> koristi keširane slojeve. Multi-stage ovdje služi uglavnom kao ilustracija; velika korist se vidi kod kompajliranih jezika (Go, Java, C), gdje se kompajler ostavlja u prvoj fazi.</p>
+<div class="code long"><div class="hd"><span>yaml</span><span>Isječak 12 · s3/p4/compose.yaml</span></div><pre>services:
+  web:
+    build: ./app
+    image: ruo/brojac:1.0
+    ports: ["8080:8000"]
+    environment: { REDIS_HOST: redis }
+    depends_on:
+      redis: { condition: service_healthy }   # web čeka dok Redis ne postane zdrav
+    restart: unless-stopped
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]                # podaci prežive brisanje kontejnera
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks: [backend]                       # port NIJE objavljen: dostupan samo web usluzi
+
+volumes:
+  redisdata:
+networks:
+  backend:</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 13 · pokretanje</span></div><pre>make s3-p4-config     # samo provjera compose.yaml
+make s3-p4            # build, up --wait, ps, tri zahtjeva, slojevi slike
+make s3-p4-persist    # down pa up: brojač nastavlja (volumen)
+make s3-p4-clean      # down -v (briše i volumen)</pre></div>
+<div class="out"><div class="hd">izlaz (skraćeno)</div><pre>NAME             SERVICE   STATUS                    PORTS
+p4-redis-1       redis     Up 12 seconds (healthy)   6379/tcp
+p4-web-1         web       Up 6 seconds (healthy)    0.0.0.0:8080-&gt;8000/tcp
+Posjeta broj 1
+Posjeta broj 2
+Posjeta broj 3</pre></div>
+<p>Compose se ponaša kao Terraform: poredi željeno i stvarno stanje, a pri ponovnom pokretanju obnavlja samo usluge čija se definicija promijenila (<code>up -d</code> bez izmjena ne radi ništa). Pogledati tri svojstva datoteke: <code>healthcheck</code> + <code>depends_on</code> (redoslijed zasnovan na zdravlju), mrežu <code>backend</code> (Redis nije dostupan izvana) i imenovani volumen (podaci su odvojeni od životnog ciklusa kontejnera). Kontejner je običan proces na domaćinu (<code>ps aux | grep gunicorn</code>), a <code>docker image history</code> prikazuje slojeve iz Dockerfilea.</p>
+</section>
+
+<section>
+<div class="kicker">7 · Kubernetes · Primjer 5 · s3/p5</div>
+<h2>Uvod u manifeste</h2>
+<div class="note bg"><span class="lbl">Pozadina</span>Compose upravlja kontejnerima na <em>jednom</em> računaru. <strong>Kubernetes</strong> (Google, 2014, nasljednik internog sistema Borg; danas ga održava CNCF) upravlja njima na <em>skupu</em> računara (klaster): raspoređuje ih, nadzire, zamjenjuje pokvarene i skalira. Sistem je deklarativan: manifest (YAML) opisuje željeno stanje, a <em>kontroleri</em> unutar klastera neprekidno usklađuju stvarno stanje s njim. Lokalni klaster pravi <code>kind</code> ("Kubernetes in Docker": čvorovi klastera su Docker kontejneri), pa nije potreban oblak.</div>
+<table class="t">
+<tr><th>Objekt</th><th>Uloga</th></tr>
+<tr><td>Pod</td><td>Najmanja jedinica: jedan ili više kontejnera koji dijele mrežu i volumene. Prolazan je.</td></tr>
+<tr><td>Deployment</td><td>Održava traženi broj kopija Poda (<code>replicas</code>) i vodi izmjene verzija (<em>rolling update</em>).</td></tr>
+<tr><td>Service</td><td>Stabilna adresa i balansiranje prema Podovima odabranim po oznakama (<code>labels</code>).</td></tr>
+<tr><td>ConfigMap / Secret</td><td>Konfiguracija i osjetljive vrijednosti odvojene od slike. Secret je samo <em>base64</em> kodiran, <strong>nije</strong> šifrovan.</td></tr>
+<tr><td>Namespace</td><td>Logička podjela klastera.</td></tr>
+</table>
+<div class="note"><span class="lbl">Poređenje s Terraformom</span>Terraform usklađuje stanje <em>na zahtjev</em> (kad se pokrene <code>apply</code>), a drift se otkriva samo tada. Kubernetes ga usklađuje <em>neprekidno</em>: ako se Pod ugasi, kontroler ga odmah ponovo napravi. Stanje koje Terraform čuva u <code>tfstate</code>, Kubernetes drži u svojoj bazi (<code>etcd</code>). Zajednička ideja: željeno stanje zapisano kao kod, sistem ga provodi.</div>
+<div class="code long"><div class="hd"><span>yaml</span><span>Isječak 14 · s3/p5/web.yaml (skraćeno)</span></div><pre>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits:   { memory: 64Mi }      # postaje cgroup memory.max (sedmica 1)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  selector: { app: web }
+  ports: [{ port: 80, targetPort: 80 }]
+# u repozitoriju još i ConfigMap s početnom stranicom, montiran u kontejner</pre></div>
+<div class="code"><div class="hd"><span>bash</span><span>Isječak 15 · pokretanje</span></div><pre>make s3-p5          # dry-run manifesta (bez klastera)
+make s3-p5-up       # opcionalno: kind klaster, apply, curl
+make s3-p5-heal     # briše jedan Pod: Deployment ga vraća (samoizlječenje)
+make s3-p5-clean    # briše kind klaster</pre></div>
+<p>Brisanje Poda ne mijenja željeno stanje (<code>replicas: 2</code>), pa kontroler napravi novi: to je samoizlječenje koje Compose i Terraform nemaju bez ponovnog pokretanja. Broj kopija se mijenja u <em>fajlu</em>, ne naredbom, a <code>kubectl diff</code> i <code>kubectl apply</code> imaju istu ulogu kao <code>plan</code> i <code>apply</code>.</p>
+</section>
+
+<section>
+<div class="kicker">8 · Pregled</div>
+<h2>Redoslijed vježbi i provjera znanja</h2>
+<table class="t">
+<tr><th>#</th><th>Naredba</th><th>Šta pokazuje</th><th>Mijenja sistem?</th></tr>
+<tr><td>1</td><td><code>make s3-p1</code></td><td>inventory, playbook, šablon, --check</td><td>ne</td></tr>
+<tr><td>2</td><td><code>make s3-p2</code></td><td>rola + Vault</td><td>ne (pravi lab tajnu lokalno)</td></tr>
+<tr><td>3</td><td><code>make s3-p3</code></td><td>Terraform + Ansible, plan</td><td>ne</td></tr>
+<tr><td>4</td><td><code>make s3-p4</code></td><td>Dockerfile + Compose</td><td>lokalni kontejneri</td></tr>
+<tr><td>5</td><td><code>make s3-p5</code></td><td>Kubernetes dry-run</td><td>ne</td></tr>
+<tr><td>·</td><td><code>make all</code></td><td>cijela sekvencija sedmica 2 i 3</td><td>idempotentno: može se ponoviti</td></tr>
+</table>
+<table class="t">
+<tr><th>Pitanje</th><th>Odgovor</th></tr>
+<tr><td>Zašto Ansible modul <code>apt</code> ne instalira nginx pri drugom pokretanju?</td><td>Modul poredi željeno ("prisutan") sa stvarnim stanjem i radi samo razliku. To je idempotentnost.</td></tr>
+<tr><td>Čemu služi handler?</td><td>Izvršava se samo kad je neki zadatak stvarno promijenio stanje, npr. reload servisa.</td></tr>
+<tr><td>Zašto prefiks <code>vault_</code> za tajne varijable?</td><td>Šifrovane vrijednosti su odvojene i vidljive u kodu po imenu, a obična varijabla na njih upućuje.</td></tr>
+<tr><td>Šta Terraform predaje Ansible-u?</td><td>Inventory: spisak mašina i njihovih adresa iz izlaza resursa.</td></tr>
+<tr><td>Zašto se u Dockerfileu prvo kopira <code>requirements.txt</code>?</td><td>Da sloj sa zavisnostima ostane u kešu dok se zavisnosti ne promijene.</td></tr>
+<tr><td>Po čemu se Kubernetes razlikuje od Terraforma u usklađivanju stanja?</td><td>Kontroleri usklađuju neprekidno, a Terraform samo kad se pokrene <code>apply</code>.</td></tr>
+</table>
+<h3>Zadaci za samostalni rad</h3>
+<ol>
+<li>U <code>s3/p1</code> dodati zadatak koji kreira korisnika <code>deploy</code> i pokrenuti playbook dva puta; objasniti zašto je drugi put <code>changed=0</code>.</li>
+<li>U roli iz <code>s3/p2</code> nadjačati <code>naslov</code> u <code>group_vars/web/vars.yml</code> i dodati novu tajnu pomoću <code>ansible-vault encrypt_string</code>.</li>
+<li>U <code>s3/p3</code> napraviti dvije mašine (<code>for_each</code>) tako da inventory ima obje. Predati izlaz <code>terraform plan</code>.</li>
+<li>U Compose datoteku dodati treću uslugu (<code>nginx</code> kao obrnuti proxy ispred <code>web</code>) i ukloniti objavljeni port s <code>web</code>.</li>
+<li>Isti sistem iz primjera 4 napisati kao Kubernetes manifest (Deployment + Service za <code>web</code> i <code>redis</code>); sliku učitati u kind pomoću <code>kind load docker-image</code>.</li>
+</ol>
+<div class="note"><span class="lbl">Sljedeća sedmica</span>Mašine i usluge su definisane kodom. Sedmica 4 uvodi mrežu i vatrozid kao kod: VPC/subnet, routing i NAT, nftables i security grupe te segmentaciju web/app/db s bastion hostom.</div>
+</section>
+
+<footer>Računarstvo u oblaku · II ciklus, III semestar · akademska 2026/27 · Sedmica 3: Upravljanje konfiguracijom i kontejneri kao kod</footer>
+</body></html>
