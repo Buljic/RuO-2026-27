@@ -262,13 +262,6 @@ nespreman pod uklanja iz odredista Servicea. Postojeci Docker `HEALTHCHECK`
 ostaje na `/health`; pad Redisa nije razlog za restart web procesa.
 Provjera spremnosti ne zamjenjuje obradu gresaka u korisnickim zahtjevima.
 
-Testovi ne traze Redis ni Docker. Iz direktorija `s3/p4/app`, u Python
-okruzenju sa zavisnostima iz `requirements.txt`, pokrenuti:
-
-```bash
-python -m unittest -v test_app
-```
-
 ## Dokumentacija
 
 Sillabus i bilješke s predavanja su u [`docs/`](docs/) (PDF): [`RuO-Syllabus.pdf`](docs/RuO-Syllabus.pdf), `RuO - Lesson1.pdf` (sedmica 1), `RuO - Lesson2.pdf` i `RuO - Lesson3.pdf`. Izvor (HTML) je u `docs/src/`, a PDF se generiše naredbom
